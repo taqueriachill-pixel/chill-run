@@ -9,7 +9,7 @@
 
 - **段階1（記録の土台）を作り終えた。実機での確認待ち。**
 - ブランチ `stage1` にあり、main への Pull request を出してある。
-- GitHub Actions でのビルドとテストは成功している（署名の鍵が未登録のあいだは、Releases には置かれない）。
+- 署名の鍵は本人が GitHub の Secrets に登録済み。固定の鍵で署名した最初の APK を Releases に置いた（`v0.1.3`）。
 - 本人にお願いしていること（`docs/SETUP.md` の 1〜7）：
   1. 署名の鍵を GitHub の Secrets に登録（`SIGNING_KEYSTORE_BASE64` と `SIGNING_PASSWORD`）
   2. 鍵のバックアップ
