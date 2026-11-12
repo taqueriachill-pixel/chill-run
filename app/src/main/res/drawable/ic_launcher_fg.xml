@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 森の緑の山 -->
+    <path
+        android:fillColor="#3DAA6B"
+        android:pathData="M28,70 L46,40 L56,54 L64,44 L80,70 Z" />
+    <!-- 海の青の波 -->
+    <path
+        android:fillColor="#2E9BD6"
+        android:pathData="M26,72 C34,66 40,78 48,72 C56,66 62,78 70,72 C74,69 78,70 82,72 L82,80 L26,80 Z" />
+</vector>
