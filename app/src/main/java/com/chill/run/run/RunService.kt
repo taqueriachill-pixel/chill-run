@@ -34,6 +34,7 @@ import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
 import com.chill.run.core.Geo
 import com.chill.run.core.GoalKind
+import com.chill.run.core.HrAlert
 import com.chill.run.core.IntervalPlan
 import com.chill.run.core.PhraseBook
 import com.chill.run.core.RunConfig
@@ -42,6 +43,7 @@ import com.chill.run.core.RunType
 import com.chill.run.core.Scenes
 import com.chill.run.core.TrackerEvent
 import com.chill.run.data.AppDb
+import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
@@ -108,6 +110,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
     private var lastLat: Double? = null
     private var lastLon: Double? = null
 
+    // 心拍数
+    private var hrClient: HrClient? = null
+    private var hrStatus = ""
+    private var hrMissingWarned = false
+    private var startElapsedMs = 0L
+
     // 歩数
     private var lastStepCounter = -1f
     private var tickCount = 0
@@ -159,7 +167,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
             repeats = intent.getIntExtra(EXTRA_REPEATS, 5),
             cooldownSec = intent.getIntExtra(EXTRA_COOLDOWN, 0),
         ) else null
-        config = settings.runConfig(type, goalKind, goalValue, hasBarometer, plan)
+        val aim = if (plan == null) intent.getStringExtra(EXTRA_AIM).orEmpty() else ""
+        config = settings.runConfig(type, goalKind, goalValue, hasBarometer, plan, aim)
         val t = RunTracker(config)
         tracker = t
         startWallMs = System.currentTimeMillis()
@@ -190,6 +199,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     goalKind = goalKind.name,
                     goalValue = goalValue,
                     elevationSource = elevationSource,
+                    aim = aim,
                 )
             )
             runId.complete(id)
@@ -210,6 +220,18 @@ class RunService : Service(), SensorEventListener, LocationListener {
             sensorManager.registerListener(this, stepDetector, SensorManager.SENSOR_DELAY_FASTEST)
         } else if (stepCounter != null) {
             sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_FASTEST)
+        }
+
+        // 心拍数の機器（時計など）が選んであれば、つないで受け取る
+        startElapsedMs = SystemClock.elapsedRealtime()
+        hrMissingWarned = false
+        val hrAddress = settings.hrDeviceAddress
+        if (hrAddress.isNotEmpty()) {
+            hrClient = HrClient(
+                this, hrAddress,
+                onHeartRate = { bpm -> tracker?.onHeartRate(SystemClock.elapsedRealtime(), bpm) },
+                onStatus = { hrStatus = it },
+            ).also { it.start() }
         }
 
         publish()
@@ -238,6 +260,11 @@ class RunService : Service(), SensorEventListener, LocationListener {
         }
         val events = t.tick(now)
         for (ev in events) handleEvent(ev)
+        // 機器を選んであるのに 90秒たっても心拍数が届かなければ、一度だけ知らせる
+        if (hrClient != null && !hrMissingWarned && t.maxHr == 0 && now - startElapsedMs > 90_000) {
+            hrMissingWarned = true
+            if (settings.announceOn) speaker?.say("心拍数が届いていません。時計を走るモードにしてください")
+        }
         publish()
         if (tickCount++ % 3 == 0) updateNotification()
     }
@@ -257,6 +284,11 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 sp.say("目標達成！" + (phrases.pick(Scenes.GOAL) ?: ""), flush = true)
             }
             is TrackerEvent.AutoPause -> {}
+            is TrackerEvent.Heart -> if (on && settings.sayHeart) {
+                val scene = if (ev.alert == HrAlert.HIGH) Scenes.HR_HIGH else Scenes.HR_EASY
+                val fallback = if (ev.alert == HrAlert.HIGH) "心拍が上がりすぎ。少しペースを落とそう" else "まだ余裕あり。少し上げてもいいよ"
+                sp.say(phrases.pick(scene) ?: fallback)
+            }
             is TrackerEvent.PhaseCountdown -> if (on) sp.say(ev.seconds.toString(), flush = true)
             is TrackerEvent.PhaseChange -> {
                 // 切り替わりは、声を切っていても振動で分かるようにする
@@ -307,6 +339,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     distM = sample.distM,
                     movingMs = sample.movingMs,
                     cadence = cadence,
+                    hr = sample.hr,
                 )
             )
         }
@@ -429,6 +462,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         speaker?.muted = false
         tracker = null
         ticker?.cancel()
+        hrClient?.close()
+        hrClient = null
         runCatching { locationManager.removeUpdates(this) }
         sensorManager.unregisterListener(this)
         t.finish()
@@ -467,7 +502,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                         LapEntity(runId = id, idx = i + 1, kind = lap.kind.name, rep = lap.rep, distanceM = lap.distanceM, movingMs = lap.movingMs)
                     })
                     dao.insertSplits(t.splits.map {
-                        SplitEntity(runId = id, idx = it.index, distanceM = it.distanceM, movingMs = it.movingMs, gainM = it.gainM, lossM = it.lossM, steps = it.steps)
+                        SplitEntity(runId = id, idx = it.index, distanceM = it.distanceM, movingMs = it.movingMs, gainM = it.gainM, lossM = it.lossM, steps = it.steps, avgHr = it.avgHr)
                     })
                     dao.updateRun(
                         run.copy(
@@ -480,12 +515,17 @@ class RunService : Service(), SensorEventListener, LocationListener {
                             calories = RunTracker.calories(weight, t.distanceM, t.gainM),
                             startAltSource = altSource,
                             altOffset = offset,
+                            avgHr = t.avgHr,
+                            maxHr = t.maxHr,
+                            hrSource = if (t.maxHr > 0) "リアルタイム" else "",
                         )
                     )
                 }
             }
             // 地図用の下ごしらえ、いつものコース、ロードかトレイルかの判定
             if (keep) runCatching { withContext(dispatcher) { PostRun.analyze(context, id) } }
+            // リアルタイムで心拍数が取れなかったときは、ヘルスコネクトにあれば取り込む（なければ何もしない）
+            if (keep && t.maxHr == 0) runCatching { HrImport.apply(context, id) }
             // ヘルスコネクトへの書き込みは数秒だけ待つ（遅いときは待たずに記録の画面へ進む）
             val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
             withTimeoutOrNull(4000) { hcJob?.join() }
@@ -526,6 +566,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
             phaseRemaining = t.phaseRemaining(),
             totalReps = config.interval?.repeats ?: 0,
             intervalDone = config.interval != null && t.currentPhase == null,
+            hr = t.currentHr(now),
+            zone = t.currentHr(now)?.let { t.zones.zoneOf(it) },
+            hrEnabled = hrClient != null,
+            hrStatus = hrStatus,
             runId = if (runId.isCompleted) runId.getCompleted() else 0,
             lat = lastLat,
             lon = lastLon,
@@ -590,6 +634,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     override fun onDestroy() {
         // 終了の操作なしに止められた場合は、次にアプリを開いたときに App が記録を仕上げる
+        hrClient?.close()
+        hrClient = null
         if (recorder.recording) recorder.stop()
         if (tracker != null) {
             tracker = null
@@ -616,6 +662,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val EXTRA_TYPE = "type"
         const val EXTRA_GOAL_KIND = "goalKind"
         const val EXTRA_GOAL_VALUE = "goalValue"
+        const val EXTRA_AIM = "aim"
         const val EXTRA_WARMUP = "warmupSec"
         const val EXTRA_RUN_BY_DISTANCE = "runByDistance"
         const val EXTRA_RUN_AMOUNT = "runAmount"
@@ -623,13 +670,14 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val EXTRA_REPEATS = "repeats"
         const val EXTRA_COOLDOWN = "cooldownSec"
 
-        fun start(context: Context, type: RunType, goalKind: GoalKind, goalValue: Double, plan: IntervalPlan? = null) {
+        fun start(context: Context, type: RunType, goalKind: GoalKind, goalValue: Double, plan: IntervalPlan? = null, aim: String = "") {
             RunHub.state.value = LiveState(active = true, type = type, goalKind = goalKind, goalValue = goalValue)
             val intent = Intent(context, RunService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_TYPE, type.name)
                 .putExtra(EXTRA_GOAL_KIND, goalKind.name)
                 .putExtra(EXTRA_GOAL_VALUE, goalValue)
+                .putExtra(EXTRA_AIM, aim)
             if (plan != null) {
                 intent.putExtra(EXTRA_WARMUP, plan.warmupSec)
                     .putExtra(EXTRA_RUN_BY_DISTANCE, plan.runByDistance)

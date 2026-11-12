@@ -60,6 +60,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val battery = remember(refresh) { Perms.batteryExempt(context) }
     val microphone = remember(refresh) { Perms.microphone(context) }
     val camera = remember(refresh) { Perms.camera(context) }
+    val bluetooth = remember(refresh) { Perms.has(context, Manifest.permission.BLUETOOTH_CONNECT) && Perms.has(context, Manifest.permission.BLUETOOTH_SCAN) }
     val hcAvailable = remember { Health.available(context) }
     val hcCount = hcGranted.intersect(Health.allPermissions).size
 
@@ -92,6 +93,10 @@ fun PermissionsScreen(onBack: () -> Unit) {
 
         PermCard("カメラ", camera, "走っている最中の写真と動画に使います。「アプリの使用時のみ」を選んでください。", "許可する") {
             single.launch(arrayOf(Manifest.permission.CAMERA))
+        }
+
+        PermCard("付近のデバイス（Bluetooth）", bluetooth, "時計から心拍数を受け取るのに使います。", "許可する") {
+            single.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN))
         }
 
         PermCard(

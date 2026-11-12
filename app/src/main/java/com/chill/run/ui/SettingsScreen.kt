@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.chill.run.core.AnnounceOptions
 import com.chill.run.core.AnnounceText
 import com.chill.run.core.AnnounceUnit
+import com.chill.run.core.HeartZones
 import com.chill.run.core.PhraseBook
 import com.chill.run.core.RunConfig
 import com.chill.run.core.TrackerEvent
@@ -58,6 +59,27 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     var weightMessage by remember { mutableStateOf<String?>(null) }
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
     var videoSeconds by remember { mutableIntStateOf(settings.videoSeconds) }
+    var sayHeart by remember { mutableStateOf(settings.sayHeart) }
+    var restHr by remember { mutableIntStateOf(settings.restHr) }
+    var maxManual by remember { mutableIntStateOf(settings.maxHrManual) }
+    var zoneTargets by remember {
+        mutableStateOf(listOf(settings.jogZoneLo, settings.jogZoneHi, settings.tempoZoneLo, settings.tempoZoneHi, settings.intervalZoneLo, settings.intervalZoneHi))
+    }
+    var hrMessage by remember { mutableStateOf<String?>(null) }
+
+    /** 目標ゾーンを変える。下が上を超えないようにそろえる */
+    fun setZone(index: Int, value: Int) {
+        val v = value.coerceIn(1, 5)
+        val list = zoneTargets.toMutableList()
+        list[index] = v
+        val pair = index / 2 * 2
+        if (index % 2 == 0 && list[pair + 1] < v) list[pair + 1] = v
+        if (index % 2 == 1 && list[pair] > v) list[pair] = v
+        zoneTargets = list
+        settings.jogZoneLo = list[0]; settings.jogZoneHi = list[1]
+        settings.tempoZoneLo = list[2]; settings.tempoZoneHi = list[3]
+        settings.intervalZoneLo = list[4]; settings.intervalZoneHi = list[5]
+    }
     var trailGain by remember { mutableIntStateOf(settings.trailGainPerKm) }
     var trailSteep by remember { mutableIntStateOf(settings.trailSteepPercent) }
 
@@ -102,6 +124,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
             SwitchRow("ペース", sayPace) { sayPace = it; settings.sayPace = it }
             SwitchRow("前の区間と比べて速いか遅いか", sayCompare) { sayCompare = it; settings.sayCompare = it }
             SwitchRow("励ましの言葉", sayCheer) { sayCheer = it; settings.sayCheer = it }
+            SwitchRow("心拍数とゾーン、心拍数からの注意（機器を選んであるとき）", sayHeart) { sayHeart = it; settings.sayHeart = it }
             Text("声の速さ：%.1f 倍".format(rate), color = Palette.text, fontSize = 15.sp)
             Slider(value = rate, onValueChange = { rate = it }, valueRange = 0.6f..1.6f, onValueChangeFinished = { settings.ttsRate = rate })
             Text("声の大きさ：%d%%".format(Math.round(volume * 100)), color = Palette.text, fontSize = 15.sp)
@@ -138,6 +161,81 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 }
             }
             phraseMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
+        }
+
+        Card {
+            SectionTitle("心拍数")
+            Text(
+                if (settings.hrDeviceAddress.isEmpty()) "心拍数の機器：まだ選んでいません" else "心拍数の機器：${settings.hrDeviceName.ifEmpty { "（名前なし）" }}",
+                color = Palette.text, fontSize = 16.sp,
+            )
+            SmallButton("心拍数の機器を選ぶ・試す", Modifier.fillMaxWidth()) { onNavigate("hrdevice") }
+
+            Text("安静時の心拍数（朝、起きてすぐの値が目安）", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "$restHr 拍/分",
+                onMinus = { restHr = (restHr - 1).coerceAtLeast(35); settings.restHr = restHr },
+                onPlus = { restHr = (restHr + 1).coerceAtMost(100); settings.restHr = restHr },
+            )
+            SmallButton("ヘルスコネクトの安静時心拍数を使う", Modifier.fillMaxWidth()) {
+                scope.launch {
+                    val v = Health.latestRestingHr(context)
+                    if (v != null && v in 35..100) {
+                        restHr = v; settings.restHr = v
+                        hrMessage = "ヘルスコネクトの値（$v 拍/分）を入れました。"
+                    } else hrMessage = "ヘルスコネクトに安静時の心拍数が見つかりませんでした。手で入れてください。"
+                }
+            }
+            hrMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
+
+            Text("最大心拍数", color = Palette.dim, fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("年齢からの目安（${settings.maxHrFromAge}）", maxManual == 0, Modifier.weight(1f)) { maxManual = 0; settings.maxHrManual = 0 }
+                Chip("自分で決める", maxManual > 0, Modifier.weight(1f)) {
+                    if (maxManual == 0) { maxManual = settings.maxHrFromAge; settings.maxHrManual = maxManual }
+                }
+            }
+            if (maxManual > 0) {
+                Stepper(
+                    "$maxManual 拍/分",
+                    onMinus = { maxManual = (maxManual - 1).coerceAtLeast(120); settings.maxHrManual = maxManual },
+                    onPlus = { maxManual = (maxManual + 1).coerceAtMost(230); settings.maxHrManual = maxManual },
+                )
+            }
+
+            // いまの設定での、ゾーンごとの心拍数
+            val zones = HeartZones(if (maxManual > 0) maxManual else settings.maxHrFromAge, restHr)
+            Text("心拍ゾーン（カルボーネン法）", color = Palette.dim, fontSize = 13.sp)
+            for (z in 1..5) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("$z", color = Palette.zone(z), fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black, modifier = Modifier.weight(0.3f))
+                    Text(HeartZones.names[z], color = Palette.text, fontSize = 15.sp, modifier = Modifier.weight(1.6f))
+                    Text("${zones.rangeText(z)} 拍/分", color = Palette.text, fontSize = 15.sp, modifier = Modifier.weight(1.2f))
+                }
+            }
+
+            Text("メニューごとの目標ゾーン", color = Palette.dim, fontSize = 13.sp)
+            listOf("ゆっくりジョグ", "ペース走", "インターバルの「走る」").forEachIndexed { i, label ->
+                Text(label, color = Palette.text, fontSize = 15.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallButton("−", Modifier.weight(0.7f)) { setZone(i * 2, zoneTargets[i * 2] - 1) }
+                    Text("下 ${zoneTargets[i * 2]}", color = Palette.text, fontSize = 16.sp, modifier = Modifier.weight(0.9f))
+                    SmallButton("＋", Modifier.weight(0.7f)) { setZone(i * 2, zoneTargets[i * 2] + 1) }
+                    SmallButton("−", Modifier.weight(0.7f)) { setZone(i * 2 + 1, zoneTargets[i * 2 + 1] - 1) }
+                    Text("上 ${zoneTargets[i * 2 + 1]}", color = Palette.text, fontSize = 16.sp, modifier = Modifier.weight(0.9f))
+                    SmallButton("＋", Modifier.weight(0.7f)) { setZone(i * 2 + 1, zoneTargets[i * 2 + 1] + 1) }
+                }
+            }
+
+            // 安全のための表示（仕様 4-4）
+            Text(
+                "【大事なこと】\n" +
+                    "・心拍ゾーンはトレーニングの目安です。体調や病気の判断に使うものではありません。\n" +
+                    "・胸の痛み、強い息切れ、めまい、ふらつきがあれば、数字に関係なくすぐに止まって休んでください。\n" +
+                    "・年齢からの最大心拍数の目安は、人によって大きくずれることがあります。\n" +
+                    "・手首で測る心拍数は、走っている最中は腕の振りや汗でずれることがあります。",
+                color = Palette.warn, fontSize = 13.sp, lineHeight = 20.sp,
+            )
         }
 
         Card {

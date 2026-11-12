@@ -54,6 +54,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     var goalMin by remember { mutableIntStateOf(settings.lastGoalMinutes) }
     var hasLocation by remember { mutableStateOf(Perms.location(context)) }
     var gpsAccuracy by remember { mutableStateOf<Float?>(null) }
+    var aim by remember { mutableStateOf(settings.lastAim) }
+    val hasHrDevice = settings.hrDeviceAddress.isNotEmpty()
     val dao = remember { AppDb.get(context).runDao() }
     val menus by remember { dao.observeMenus() }.collectAsState(initial = emptyList())
     var menuId by remember { mutableLongStateOf(settings.lastMenuId) }
@@ -73,7 +75,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
         }
         val plan = if (goalKind == GoalKind.INTERVAL) menu?.toPlan() ?: return else null
         if (menu != null) settings.lastMenuId = menu.id
-        RunService.start(context, type, goalKind, goalValue, plan)
+        settings.lastAim = aim
+        RunService.start(context, type, goalKind, goalValue, plan, if (hasHrDevice) aim else "")
         context.startActivity(Intent(context, RunActivity::class.java))
     }
 
@@ -153,6 +156,31 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
+            // 心拍数の機器を選んであるときだけ：今日のねらい（心拍ゾーンで、ペースが合っているかを声で知らせる）
+            if (hasHrDevice && goalKind != GoalKind.INTERVAL) {
+                Card {
+                    SectionTitle("今日のねらい（心拍数でペースを見張る）")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("なし", aim == "", Modifier.weight(1f), color = accent) { aim = "" }
+                        Chip("ゆっくりジョグ", aim == "JOG", Modifier.weight(1f), color = accent) { aim = "JOG" }
+                        Chip("ペース走", aim == "TEMPO", Modifier.weight(1f), color = accent) { aim = "TEMPO" }
+                    }
+                    Text(
+                        when (aim) {
+                            "JOG" -> "目標はゾーン ${zoneText(settings.jogZoneLo, settings.jogZoneHi)}。上がりすぎが1分続くと知らせます。"
+                            "TEMPO" -> "目標はゾーン ${zoneText(settings.tempoZoneLo, settings.tempoZoneHi)}。上がりすぎ・余裕がありすぎを知らせます。"
+                            else -> "心拍数の注意は出しません（1km ごとの心拍数とゾーンは伝えます）。"
+                        } + "　走る前に、時計を「走るモード」にしてください。",
+                        color = Palette.dim, fontSize = 13.sp,
+                    )
+                }
+            } else if (hasHrDevice) {
+                Text(
+                    "インターバルの「走る」は、ゾーン ${zoneText(settings.intervalZoneLo, settings.intervalZoneHi)} が目標です。走る前に、時計を「走るモード」にしてください。",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+            }
+
             if (!hasLocation) {
                 Card {
                     Text("位置情報の許可が必要です（「正確な位置」「アプリの使用中のみ」）。", color = Palette.warn, fontSize = 15.sp)
@@ -183,3 +211,5 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
         }
     }
 }
+
+fun zoneText(lo: Int, hi: Int) = if (lo == hi) "$lo" else "$lo〜$hi"

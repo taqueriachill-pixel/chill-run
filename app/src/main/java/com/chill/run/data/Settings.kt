@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.chill.run.core.AnnounceOptions
 import com.chill.run.core.AnnounceUnit
 import com.chill.run.core.GoalKind
+import com.chill.run.core.HeartRate
 import com.chill.run.core.IntervalPlan
 import com.chill.run.core.RunConfig
 import com.chill.run.core.RunType
@@ -86,14 +87,70 @@ class Settings(context: Context) {
         get() = p.getInt("videoSeconds", 4)
         set(v) = p.edit().putInt("videoSeconds", v).apply()
 
+    // ---- 心拍数 ----
+    /** 心拍数を受け取る機器（時計など）の番号と名前。選んでいなければ空 */
+    var hrDeviceAddress: String
+        get() = p.getString("hrDeviceAddress", "") ?: ""
+        set(v) = p.edit().putString("hrDeviceAddress", v).apply()
+
+    var hrDeviceName: String
+        get() = p.getString("hrDeviceName", "") ?: ""
+        set(v) = p.edit().putString("hrDeviceName", v).apply()
+
+    var restHr: Int
+        get() = p.getInt("restHr", 60)
+        set(v) = p.edit().putInt("restHr", v).apply()
+
+    /** 自分で測った最大心拍数。0 なら年齢からの目安を使う */
+    var maxHrManual: Int
+        get() = p.getInt("maxHrManual", 0)
+        set(v) = p.edit().putInt("maxHrManual", v).apply()
+
+    /** 「最大心拍数を更新しますか？」に「しない」と答えた値。これ以下では、もう聞かない */
+    var maxHrDeclined: Int
+        get() = p.getInt("maxHrDeclined", 0)
+        set(v) = p.edit().putInt("maxHrDeclined", v).apply()
+
+    val maxHrFromAge: Int get() = HeartRate.maxFromAge(java.time.Year.now().value - birthYear)
+    val maxHr: Int get() = if (maxHrManual > 0) maxHrManual else maxHrFromAge
+
+    var sayHeart: Boolean
+        get() = p.getBoolean("sayHeart", true)
+        set(v) = p.edit().putBoolean("sayHeart", v).apply()
+
+    /** メニューごとの目標ゾーン（下・上） */
+    var jogZoneLo: Int
+        get() = p.getInt("jogZoneLo", 2)
+        set(v) = p.edit().putInt("jogZoneLo", v).apply()
+    var jogZoneHi: Int
+        get() = p.getInt("jogZoneHi", 2)
+        set(v) = p.edit().putInt("jogZoneHi", v).apply()
+    var tempoZoneLo: Int
+        get() = p.getInt("tempoZoneLo", 3)
+        set(v) = p.edit().putInt("tempoZoneLo", v).apply()
+    var tempoZoneHi: Int
+        get() = p.getInt("tempoZoneHi", 4)
+        set(v) = p.edit().putInt("tempoZoneHi", v).apply()
+    var intervalZoneLo: Int
+        get() = p.getInt("intervalZoneLo", 4)
+        set(v) = p.edit().putInt("intervalZoneLo", v).apply()
+    var intervalZoneHi: Int
+        get() = p.getInt("intervalZoneHi", 4)
+        set(v) = p.edit().putInt("intervalZoneHi", v).apply()
+
+    /** 今日のねらい（前回選んだもの） */
+    var lastAim: String
+        get() = p.getString("lastAim", "") ?: ""
+        set(v) = p.edit().putString("lastAim", v).apply()
+
     var lastMenuId: Long
         get() = p.getLong("lastMenuId", 0)
         set(v) = p.edit().putLong("lastMenuId", v).apply()
 
     val announceOptions: AnnounceOptions
-        get() = AnnounceOptions(pace = sayPace, compare = sayCompare, cheer = sayCheer)
+        get() = AnnounceOptions(pace = sayPace, compare = sayCompare, cheer = sayCheer, heart = sayHeart)
 
-    fun runConfig(type: RunType, goalKind: GoalKind, goalValue: Double, hasBarometer: Boolean, interval: IntervalPlan? = null): RunConfig {
+    fun runConfig(type: RunType, goalKind: GoalKind, goalValue: Double, hasBarometer: Boolean, interval: IntervalPlan? = null, aim: String = ""): RunConfig {
         val iv = announceInterval
         val unit = if (iv.startsWith("T")) AnnounceUnit.TIME else AnnounceUnit.DISTANCE
         val every = iv.drop(1).toDoubleOrNull() ?: 1000.0

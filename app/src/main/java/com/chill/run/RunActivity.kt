@@ -157,12 +157,21 @@ private fun RunScreen(
             }
             Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 BigStat("平均ペース", Fmt.pace(state.avgPace), Modifier.weight(1f), small = true)
+                if (state.hrEnabled) {
+                    val z = state.zone
+                    BigStat(
+                        if (z != null) (if (z >= 1) "心拍 ゾーン$z" else "心拍") else "心拍",
+                        state.hr?.toString() ?: "--", Modifier.weight(1f), small = true,
+                        color = if (z != null) Palette.zone(z) else Color.White,
+                    )
+                }
                 BigStat("ケイデンス", state.cadence?.toString() ?: "--", Modifier.weight(1f), small = true)
                 BigStat("登り", "+${Math.round(state.gainM)}m", Modifier.weight(1f), small = true)
             }
             Text(
-                "標高：${state.elevationSource}" + (state.altitudeM?.let { "　いま ${Math.round(it)}m" } ?: ""),
-                color = Palette.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp),
+                "標高：${state.elevationSource}" + (state.altitudeM?.let { "　いま ${Math.round(it)}m" } ?: "") +
+                    if (state.hrEnabled && state.hr == null && state.hrStatus.isNotEmpty()) "\n心拍数：${state.hrStatus}" else "",
+                color = Palette.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp), textAlign = TextAlign.Center,
             )
         }
 
@@ -217,9 +226,9 @@ private fun gpsColor(acc: Float?): Color = when {
 }
 
 @Composable
-private fun BigStat(label: String, value: String, modifier: Modifier = Modifier, small: Boolean = false) {
+private fun BigStat(label: String, value: String, modifier: Modifier = Modifier, small: Boolean = false, color: Color = Color.White) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = Color.White, fontSize = if (small) 30.sp else 46.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = color, fontSize = if (small) 30.sp else 46.sp, fontWeight = FontWeight.Bold)
         Text(label, color = Palette.dim, fontSize = 14.sp)
     }
 }

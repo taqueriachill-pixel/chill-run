@@ -40,6 +40,12 @@ data class LiveState(
     val recordingSec: Int = 0,
     /** マイクを使える状態で記録を始められたか */
     val micReady: Boolean = false,
+    /** いまの心拍数とゾーン（届いていなければ null） */
+    val hr: Int? = null,
+    val zone: Int? = null,
+    /** 心拍数の機器を使う設定になっているか、と、つながりの状態（画面に出す短い言葉） */
+    val hrEnabled: Boolean = false,
+    val hrStatus: String = "",
     /** 終了して保存したランの番号。保存しなかったときは -1 */
     val finishedRunId: Long? = null,
 )

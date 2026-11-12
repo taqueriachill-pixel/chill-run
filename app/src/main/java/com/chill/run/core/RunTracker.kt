@@ -47,6 +47,17 @@ data class RunConfig(
     val announceEvery: Double = 1000.0,
     val gainThresholdM: Double = 2.5,
     val interval: IntervalPlan? = null,
+    // ---- 心拍数 ----
+    val hrMax: Int = 180,
+    val hrRest: Int = 60,
+    /** 今日のねらいの目標ゾーン（0 なら見張らない） */
+    val targetZoneLo: Int = 0,
+    val targetZoneHi: Int = 0,
+    /** 速く走りたいメニューか（目標より低いときに「上げてもいいよ」と言うか） */
+    val targetWantsFaster: Boolean = false,
+    /** インターバルの「走る」の目標ゾーン */
+    val intervalZoneLo: Int = 4,
+    val intervalZoneHi: Int = 4,
 )
 
 /** 1km ごとの区切り（最後の端数も含む） */
@@ -57,6 +68,8 @@ data class Split(
     val gainM: Double,
     val lossM: Double,
     val steps: Int,
+    /** この区間の平均の心拍数（取れなかったら 0） */
+    val avgHr: Int = 0,
 ) {
     val paceSecPerKm: Double? get() = if (distanceM > 1) movingMs / 1000.0 / (distanceM / 1000.0) else null
     val cadence: Int get() = if (movingMs > 0) Math.round(steps / (movingMs / 60000.0)).toInt() else 0
@@ -70,6 +83,7 @@ data class TrackSample(
     val accuracyM: Float,
     val distM: Double,
     val movingMs: Long,
+    val hr: Int? = null,
 )
 
 sealed interface TrackerEvent {
@@ -83,7 +97,13 @@ sealed interface TrackerEvent {
         /** この区間の登りと下り（メートル） */
         val gainM: Double = 0.0,
         val lossM: Double = 0.0,
+        /** いまの心拍数とゾーン（取れていないときは null） */
+        val hr: Int? = null,
+        val zone: Int? = null,
     ) : TrackerEvent
+
+    /** 心拍数から見て、ペースを落とす／上げてもよい */
+    data class Heart(val alert: HrAlert) : TrackerEvent
 
     /** インターバル：切り替えの3秒前から「3、2、1」 */
     data class PhaseCountdown(val seconds: Int) : TrackerEvent
@@ -145,6 +165,37 @@ class RunTracker(val config: RunConfig) {
     private var intervalStartGain = 0.0
     private var intervalStartLoss = 0.0
 
+    // 心拍数
+    val zones = HeartZones(config.hrMax, config.hrRest)
+    private val coach = HrCoach()
+    private var hrValue = 0
+    private var hrAt = -1L
+    private var hrSum = 0L
+    private var hrCount = 0
+    private var splitHrSum = 0L
+    private var splitHrCount = 0
+    var maxHr = 0; private set
+    /** ゾーンごとの時間（ミリ秒）。0 はゾーン外 */
+    val zoneMs = LongArray(6)
+    val avgHr: Int get() = if (hrCount > 0) Math.round(hrSum.toDouble() / hrCount).toInt() else 0
+    private val gainHistory = ArrayDeque<Pair<Long, Double>>()
+
+    /** 心拍数を受け取る */
+    fun onHeartRate(tMs: Long, bpm: Int) {
+        if (bpm !in 30..240) return
+        hrValue = bpm
+        hrAt = tMs
+    }
+
+    /** いまの心拍数。10秒以上届いていなければ null */
+    fun currentHr(tMs: Long): Int? = if (hrAt >= 0 && tMs - hrAt <= 10_000) hrValue else null
+
+    /** 登りの途中か（直近30秒で 3m 以上登った） */
+    private fun isClimbing(): Boolean {
+        val first = gainHistory.firstOrNull() ?: return false
+        return elevation.gain - first.second >= 3.0
+    }
+
     // インターバル用
     private val phases: List<Phase> = config.interval?.phases().orEmpty()
     private var phaseIndex = 0
@@ -180,7 +231,7 @@ class RunTracker(val config: RunConfig) {
         if (anchorLat.isNaN()) {
             anchorLat = lat; anchorLon = lon
             if (speedMps != null) lastSpeed = speedMps.toDouble()
-            return if (isPaused) null else TrackSample(lat, lon, altitudeM, accuracyM, distanceM, movingMs)
+            return if (isPaused) null else TrackSample(lat, lon, altitudeM, accuracyM, distanceM, movingMs, currentHr(tMs))
         }
         val d = Geo.distanceM(anchorLat, anchorLon, lat, lon)
         val dt = if (prevFix >= 0) (tMs - prevFix) / 1000.0 else 1.0
@@ -198,7 +249,7 @@ class RunTracker(val config: RunConfig) {
         }
         distanceM += d
         anchorLat = lat; anchorLon = lon
-        return TrackSample(lat, lon, altitudeM, accuracyM, distanceM, movingMs)
+        return TrackSample(lat, lon, altitudeM, accuracyM, distanceM, movingMs, currentHr(tMs))
     }
 
     /** 標高（合わせ済みの値）を受け取る */
@@ -261,6 +312,24 @@ class RunTracker(val config: RunConfig) {
         if (isPaused) return events
         movingMs += dt
 
+        // 心拍数の集計と見張り
+        gainHistory.addLast(movingMs to elevation.gain)
+        while (gainHistory.size > 1 && movingMs - gainHistory.first().first > 30_000) gainHistory.removeFirst()
+        val hr = currentHr(tMs)
+        val zone = hr?.let { zones.zoneOf(it) }
+        if (hr != null && zone != null) {
+            hrSum += hr; hrCount++
+            splitHrSum += hr; splitHrCount++
+            if (hr > maxHr) maxHr = hr
+            zoneMs[zone] += dt
+        }
+        val phaseNow = currentPhase
+        val (lo, hi, faster) = when {
+            config.interval != null -> if (phaseNow?.kind == PhaseKind.RUN) Triple(config.intervalZoneLo, config.intervalZoneHi, true) else Triple(0, 0, false)
+            else -> Triple(config.targetZoneLo, config.targetZoneHi, config.targetWantsFaster)
+        }
+        coach.update(movingMs, zone, lo, hi, faster, config.type == RunType.TRAIL && isClimbing())?.let { events += TrackerEvent.Heart(it) }
+
         paceWindow.addLast(movingMs to distanceM)
         while (paceWindow.size > 2 && movingMs - paceWindow.first().first > 20_000) paceWindow.removeFirst()
 
@@ -278,7 +347,7 @@ class RunTracker(val config: RunConfig) {
                         val pace = segMs / 1000.0 / (config.announceEvery / 1000.0)
                         events += TrackerEvent.Interval(
                             intervalIndex, next, movingMs, pace, prevIntervalPace,
-                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss,
+                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss, hr, zone,
                         )
                         prevIntervalPace = pace
                         intervalStartMs = movingMs
@@ -295,7 +364,7 @@ class RunTracker(val config: RunConfig) {
                         val pace = if (segDist > 10) config.announceEvery / (segDist / 1000.0) else null
                         events += TrackerEvent.Interval(
                             intervalIndex, distanceM, movingMs, pace, prevIntervalPace,
-                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss,
+                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss, hr, zone,
                         )
                         prevIntervalPace = pace
                         intervalStartMs = movingMs
@@ -401,7 +470,10 @@ class RunTracker(val config: RunConfig) {
             gainM = elevation.gain - splitStartGain,
             lossM = elevation.loss - splitStartLoss,
             steps = steps - splitStartSteps,
+            avgHr = if (splitHrCount > 0) Math.round(splitHrSum.toDouble() / splitHrCount).toInt() else 0,
         )
+        splitHrSum = 0
+        splitHrCount = 0
         splitStartDist += dist
         splitStartMs = movingMs
         splitStartGain = elevation.gain

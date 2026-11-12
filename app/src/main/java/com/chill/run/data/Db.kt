@@ -50,6 +50,13 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "0") val courseId: Long = 0,
     /** 自動の判定が選んだ種類と違うときの提案（"TRAIL" か "ROAD"）。なければ空 */
     @ColumnInfo(defaultValue = "") val typeSuggestion: String = "",
+    // ---- ここから段階4で追加 ----
+    @ColumnInfo(defaultValue = "0") val avgHr: Int = 0,
+    @ColumnInfo(defaultValue = "0") val maxHr: Int = 0,
+    /** 心拍数の取り方：「リアルタイム」か「ヘルスコネクト」。取れていなければ空 */
+    @ColumnInfo(defaultValue = "") val hrSource: String = "",
+    /** 今日のねらい："JOG"（ゆっくりジョグ）、"TEMPO"（ペース走）、なければ空 */
+    @ColumnInfo(defaultValue = "") val aim: String = "",
 )
 
 /** いつものコース */
@@ -101,6 +108,8 @@ data class PointEntity(
     val distM: Double,
     val movingMs: Long,
     val cadence: Int?,
+    /** 心拍数（段階4で追加）。取れていなければ null */
+    val hr: Int? = null,
 )
 
 /** 1km ごとの区切り */
@@ -114,6 +123,8 @@ data class SplitEntity(
     val gainM: Double,
     val lossM: Double,
     val steps: Int,
+    /** 平均の心拍数（段階4で追加）。取れていなければ 0 */
+    @ColumnInfo(defaultValue = "0") val avgHr: Int = 0,
 )
 
 /** 走っている最中に残した、声のメモ・写真・動画 */
@@ -212,6 +223,13 @@ interface RunDao {
     @Query("DELETE FROM laps WHERE runId = :runId")
     suspend fun deleteLaps(runId: Long)
 
+    // ---- ここから段階4で追加 ----
+    @Query("UPDATE points SET hr = :hr WHERE id = :id")
+    suspend fun setPointHr(id: Long, hr: Int?)
+
+    @Update
+    suspend fun updateSplit(split: SplitEntity)
+
     // ---- ここから段階3で追加 ----
     @Insert
     suspend fun insertMedia(media: MediaEntity): Long
@@ -263,7 +281,7 @@ suspend fun RunDao.deleteRun(runId: Long) {
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
         IntervalMenuEntity::class, MediaEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -275,7 +293,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { instance = it }
         }
     }
@@ -292,5 +310,12 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V2_TO_3.forEach { db.execSQL(it) }
+    }
+}
+
+/** 段階3 → 段階4 の「引っ越し」。心拍数の項目を足す */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V3_TO_4.forEach { db.execSQL(it) }
     }
 }

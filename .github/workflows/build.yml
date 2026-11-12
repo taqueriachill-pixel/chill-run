@@ -44,7 +44,7 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
           gradle --no-daemon assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "chill-run-0.3.${GITHUB_RUN_NUMBER}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "chill-run-0.4.${GITHUB_RUN_NUMBER}.apk"
           rm -f "$RUNNER_TEMP/release.keystore"
 
       - name: Releases に置く
@@ -52,7 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v0.3.${GITHUB_RUN_NUMBER}" "chill-run-0.3.${GITHUB_RUN_NUMBER}.apk" \
+          gh release create "v0.4.${GITHUB_RUN_NUMBER}" "chill-run-0.4.${GITHUB_RUN_NUMBER}.apk" \
             --target "$GITHUB_SHA" \
-            --title "Chill Run 0.3.${GITHUB_RUN_NUMBER}" \
+            --title "Chill Run 0.4.${GITHUB_RUN_NUMBER}" \
             --notes "ブランチ: ${GITHUB_REF_NAME} / 進み具合は docs/PROGRESS.md を参照。下の .apk をスマホでダウンロードしてインストールしてください。"

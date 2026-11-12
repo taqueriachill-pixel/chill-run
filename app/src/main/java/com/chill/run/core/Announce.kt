@@ -56,6 +56,7 @@ data class AnnounceOptions(
     val pace: Boolean = true,
     val compare: Boolean = true,
     val cheer: Boolean = true,
+    val heart: Boolean = true,
 )
 
 object AnnounceText {
@@ -84,6 +85,9 @@ object AnnounceText {
                 )
             }
             sb.append("。")
+        }
+        if (opts.heart && ev.hr != null && ev.zone != null) {
+            sb.append("心拍${ev.hr}、").append(if (ev.zone >= 1) "ゾーン${ev.zone}" else "ゾーンの下").append("。")
         }
         // トレイルでは、この区間の登りと下りも伝える
         if (config.type == RunType.TRAIL) {

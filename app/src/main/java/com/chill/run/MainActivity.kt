@@ -21,6 +21,7 @@ import com.chill.run.ui.ChillTheme
 import com.chill.run.ui.DetailScreen
 import com.chill.run.ui.HistoryScreen
 import com.chill.run.ui.HomeScreen
+import com.chill.run.ui.HrDeviceScreen
 import com.chill.run.ui.IntervalScreen
 import com.chill.run.ui.MapSaveScreen
 import com.chill.run.ui.Palette
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
                         )
                         r == "settings" -> SettingsScreen(onBack = { route = "home" }, onNavigate = { route = it })
                         r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
+                        r == "hrdevice" -> HrDeviceScreen(onBack = { route = "settings" })
                         r.startsWith("interval/") -> IntervalScreen(
                             menuId = r.removePrefix("interval/").toLongOrNull() ?: 0,
                             onBack = { route = "home" },
@@ -64,7 +66,7 @@ class MainActivity : ComponentActivity() {
 
     private fun parentOf(r: String) = when {
         r.startsWith("detail/") -> "history"
-        r == "mapsave" -> "settings"
+        r == "mapsave" || r == "hrdevice" -> "settings"
         else -> "home"
     }
 

@@ -30,4 +30,20 @@ object MigrationSql {
         "CREATE TABLE IF NOT EXISTS `media` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `time` INTEGER NOT NULL, `lat` REAL, `lon` REAL, `distM` REAL NOT NULL, `file` TEXT NOT NULL, `text` TEXT NOT NULL, `textState` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL)",
         "CREATE INDEX IF NOT EXISTS `index_media_runId` ON `media` (`runId`)",
     )
+
+    /** 段階3 までの各表にある項目（段階4 で項目を足した表だけ） */
+    val V3_COLUMNS = mapOf(
+        "runs" to RUNS_V2_COLUMNS,
+        "points" to setOf("id", "runId", "time", "lat", "lon", "alt", "accuracy", "distM", "movingMs", "cadence"),
+        "splits" to setOf("id", "runId", "idx", "distanceM", "movingMs", "gainM", "lossM", "steps"),
+    )
+
+    val V3_TO_4 = listOf(
+        "ALTER TABLE `runs` ADD COLUMN `avgHr` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `runs` ADD COLUMN `maxHr` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `runs` ADD COLUMN `hrSource` TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE `runs` ADD COLUMN `aim` TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE `points` ADD COLUMN `hr` INTEGER",
+        "ALTER TABLE `splits` ADD COLUMN `avgHr` INTEGER NOT NULL DEFAULT 0",
+    )
 }

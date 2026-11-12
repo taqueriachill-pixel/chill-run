@@ -180,6 +180,33 @@ object Health {
         }.getOrNull()
     }
 
+    /** ある時間帯の心拍数（時刻ミリ秒 と 拍/分）を、古い順に返す。読めなければ空 */
+    suspend fun readHeartRate(context: Context, startMs: Long, endMs: Long): List<Pair<Long, Int>> {
+        if (!available(context)) return emptyList()
+        return runCatching {
+            readAll(context, HeartRateRecord::class, Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
+                .flatMap { r -> r.samples.map { it.time.toEpochMilli() to it.beatsPerMinute.toInt() } }
+                .filter { it.second in 30..240 }
+                .sortedBy { it.first }
+        }.getOrDefault(emptyList())
+    }
+
+    /** いちばん新しい安静時の心拍数。なければ null */
+    suspend fun latestRestingHr(context: Context): Int? {
+        if (!available(context)) return null
+        return runCatching {
+            val now = Instant.now()
+            client(context).readRecords(
+                ReadRecordsRequest(
+                    recordType = RestingHeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(now.minusSeconds(30L * 86400), now),
+                    ascendingOrder = false,
+                    pageSize = 1,
+                )
+            ).records.firstOrNull()?.beatsPerMinute?.toInt()
+        }.getOrNull()
+    }
+
     private suspend fun <T : Record> readAll(context: Context, type: KClass<T>, from: Instant, to: Instant, max: Int = 20000): List<T> {
         val out = ArrayList<T>()
         var token: String? = null

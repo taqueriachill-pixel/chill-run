@@ -417,4 +417,118 @@ class CoreTest {
         val road = AnnounceText.interval(ev, RunConfig(), AnnounceOptions(cheer = false), PhraseBook(emptyMap()))
         assertFalse(road, road.contains("登り"))
     }
+
+    // ---- 段階4 ----
+
+    @Test
+    fun karvonen_zones() {
+        // 1978年生まれ → 2026年に48歳。208 − 0.7×48 = 174.4 → 174
+        assertEquals(174, HeartRate.maxFromAge(48))
+        val z = HeartZones(maxHr = 180, restHr = 60) // 予備 120
+        assertEquals(120, z.lowerBound(1)) // 50%
+        assertEquals(132, z.lowerBound(2)) // 60%
+        assertEquals(144, z.lowerBound(3))
+        assertEquals(156, z.lowerBound(4))
+        assertEquals(168, z.lowerBound(5)) // 90%
+        assertEquals(0, z.zoneOf(110))
+        assertEquals(1, z.zoneOf(120))
+        assertEquals(2, z.zoneOf(143))
+        assertEquals(3, z.zoneOf(152))
+        assertEquals(5, z.zoneOf(190))
+        assertEquals("132〜143", z.rangeText(2))
+        assertEquals("168〜", z.rangeText(5))
+    }
+
+    @Test
+    fun heart_rate_contact_flag() {
+        assertEquals(null, HeartRate.contact(byteArrayOf(0x00, 80)))        // 触れているかを知らせない機器
+        assertEquals(true, HeartRate.contact(byteArrayOf(0x06, 89)))        // 触れている
+        assertEquals(false, HeartRate.contact(byteArrayOf(0x04, 0)))        // 外れている
+        assertEquals(89, HeartRate.parse(byteArrayOf(0x06, 89)))
+    }
+
+    @Test
+    fun coach_warns_after_a_minute_and_not_too_often() {
+        val c = HrCoach()
+        val alerts = ArrayList<Pair<Long, HrAlert>>()
+        // 目標ゾーン2 で、ゾーン4 が5分続く
+        for (t in 0..300) c.update(t * 1000L, 4, 2, 2, false, false)?.let { alerts += t.toLong() to it }
+        assertEquals(listOf(60L to HrAlert.HIGH, 180L to HrAlert.HIGH, 300L to HrAlert.HIGH), alerts)
+        // 目標の中に戻れば何も言わない
+        val c2 = HrCoach()
+        assertEquals(null, (0..300).firstNotNullOfOrNull { c2.update(it * 1000L, 2, 2, 2, false, false) })
+        // 一度下がれば数え直す
+        val c3 = HrCoach()
+        var got: HrAlert? = null
+        for (t in 0..110) {
+            val zone = if (t == 50) 2 else 4
+            c3.update(t * 1000L, zone, 2, 2, false, false)?.let { got = it }
+        }
+        assertEquals(null, got)
+    }
+
+    @Test
+    fun coach_easy_only_when_wanting_speed_and_relaxed_on_climbs() {
+        val jog = HrCoach()
+        assertEquals(null, (0..400).firstNotNullOfOrNull { jog.update(it * 1000L, 1, 2, 2, false, false) })
+        val tempo = HrCoach()
+        val first = (0..400).firstNotNullOfOrNull { t -> tempo.update(t * 1000L, 2, 3, 4, true, false)?.let { t to it } }
+        assertEquals(120 to HrAlert.EASY, first)
+        // 登りの途中は、1ゾーン上までは注意しない
+        val climb = HrCoach()
+        assertEquals(null, (0..300).firstNotNullOfOrNull { climb.update(it * 1000L, 3, 2, 2, false, true) })
+        assertNotNull((0..300).firstNotNullOfOrNull { climb.update(it * 1000L, 4, 2, 2, false, true) })
+        // 心拍数が取れていないときは何も言わない
+        val none = HrCoach()
+        assertEquals(null, (0..300).firstNotNullOfOrNull { none.update(it * 1000L, null, 2, 2, false, false) })
+    }
+
+    @Test
+    fun tracker_heart_rate_stats_and_announcement() {
+        val cfg = RunConfig(autoPause = false, hrMax = 180, hrRest = 60, targetZoneLo = 2, targetZoneHi = 2)
+        val t = RunTracker(cfg)
+        t.tick(0)
+        var lat = 35.6
+        var now = 0L
+        val events = ArrayList<TrackerEvent>()
+        repeat(400) { i ->
+            now += 1000
+            lat += 3.0 / mPerDegLat
+            t.onHeartRate(now, if (i < 200) 140 else 160) // 前半ゾーン2、後半ゾーン4
+            t.onLocation(now, lat, 139.5, 5f, 3f)
+            events += t.tick(now)
+        }
+        t.finish()
+        assertEquals(150, t.avgHr)
+        assertEquals(160, t.maxHr)
+        assertEquals(200_000L, t.zoneMs[2])
+        assertEquals(200_000L, t.zoneMs[4])
+        val iv = events.filterIsInstance<TrackerEvent.Interval>().first()
+        assertEquals(160, iv.hr)
+        assertEquals(4, iv.zone)
+        val text = AnnounceText.interval(iv, cfg, AnnounceOptions(cheer = false), PhraseBook(emptyMap()))
+        assertTrue(text, text.contains("心拍160、ゾーン4。"))
+        // ゾーン4 が 60秒 続いた所で「上がりすぎ」
+        val heart = events.filterIsInstance<TrackerEvent.Heart>()
+        assertEquals(HrAlert.HIGH, heart.first().alert)
+        assertTrue(t.splits[0].avgHr in 148..152)
+        // 心拍数が10秒届かなければ、取れていない扱い
+        assertEquals(null, t.currentHr(now + 11_000))
+    }
+
+    @Test
+    fun interval_watches_heart_only_while_running() {
+        val plan = IntervalPlan(runByDistance = false, runAmount = 150.0, restSec = 150, repeats = 2)
+        val t = RunTracker(RunConfig(autoPause = false, goalKind = GoalKind.INTERVAL, announceEvery = 0.0, interval = plan, hrMax = 180, hrRest = 60))
+        t.tick(0)
+        var now = 0L
+        val alerts = ArrayList<Pair<Long, HrAlert>>()
+        repeat(300) {
+            now += 1000
+            t.onHeartRate(now, 175) // ずっとゾーン5（「走る」の目標はゾーン4）
+            t.tick(now).filterIsInstance<TrackerEvent.Heart>().forEach { alerts += now / 1000 to it.alert }
+        }
+        // 「走る」の間（0〜150秒）だけ注意が出て、「ゆっくり」の間（150〜300秒）は出ない
+        assertEquals(listOf(61L to HrAlert.HIGH), alerts)
+    }
 }

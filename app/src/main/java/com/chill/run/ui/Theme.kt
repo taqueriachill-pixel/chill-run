@@ -40,6 +40,10 @@ object Palette {
     val warn = Color(0xFFE8A33D)
     val danger = Color(0xFFD9534F)
 
+    /** 心拍ゾーンの色（0 はゾーン外） */
+    val zones = listOf(Color(0xFF6B7C85), Color(0xFF7FA7C4), Color(0xFF2E9BD6), Color(0xFF3DAA6B), Color(0xFFE8A33D), Color(0xFFD9534F))
+    fun zone(z: Int) = zones[z.coerceIn(0, 5)]
+
     fun of(type: RunType) = if (type == RunType.TRAIL) trail else road
     fun of(type: String) = if (type == "TRAIL") trail else road
 }

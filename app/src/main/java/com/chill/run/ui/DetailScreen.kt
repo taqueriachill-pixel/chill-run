@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,14 +35,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
+import com.chill.run.core.HeartZones
 import com.chill.run.core.PhaseKind
 import com.chill.run.data.AppDb
 import com.chill.run.data.CourseEntity
+import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
 import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
+import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
@@ -87,6 +91,9 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         }
     }
 
+    val settings = remember { Settings(context) }
+    var declinedMax by remember { mutableIntStateOf(settings.maxHrDeclined) }
+    var hrImportMessage by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<MediaEntity?>(null) }
     var busyMemo by remember { mutableStateOf(0L) }
     var memoMessage by remember { mutableStateOf<String?>(null) }
@@ -181,10 +188,14 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 Stat("消費カロリー（目安）", "${Math.round(r.calories)} kcal")
             }
             Row { Stat("登り", "+${Math.round(r.gainM)} m"); Stat("下り", "-${Math.round(r.lossM)} m") }
+            if (r.avgHr > 0) {
+                Row { Stat("平均の心拍数", "${r.avgHr} 拍/分"); Stat("最大の心拍数", "${r.maxHr} 拍/分") }
+            }
             Text(
                 "標高：${r.elevationSource}" + if (r.startAltSource.isNotEmpty()) "（開始地点の合わせ方：${r.startAltSource}）" else "",
                 color = Palette.dim, fontSize = 13.sp,
             )
+            if (r.hrSource.isNotEmpty()) Text("心拍数：${r.hrSource}", color = Palette.dim, fontSize = 13.sp)
             if (r.note.isNotEmpty()) Text(r.note, color = Palette.warn, fontSize = 13.sp)
         }
 
@@ -215,6 +226,85 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                         minRange = 60.0, inverted = true,
                     )
                 }
+                val withHr = points.filter { it.hr != null }
+                if (withHr.size >= 2) {
+                    val xs = DoubleArray(withHr.size) { withHr[it].distM }
+                    val ys = DoubleArray(withHr.size) { withHr[it].hr!!.toDouble() }
+                    DistanceChart(
+                        xs, ys, Palette.danger,
+                        topLabel = "心拍数　いちばん高い ${Math.round(ys.max())}",
+                        bottomLabel = "いちばん低い ${Math.round(ys.min())}",
+                        minRange = 30.0,
+                    )
+                }
+            }
+        }
+
+        // 心拍ゾーンごとの時間
+        val hrPoints = points.count { it.hr != null }
+        if (hrPoints >= 2) {
+            val zones = remember(points) { HeartZones(settings.maxHr, settings.restHr) }
+            val zoneMs = remember(points) { zoneTimes(points, zones) }
+            val total = zoneMs.sum().coerceAtLeast(1)
+            Card {
+                SectionTitle("心拍ゾーンごとの時間")
+                for (z in 5 downTo 1) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("$z ${HeartZones.names[z]}", color = Palette.text, fontSize = 14.sp, modifier = Modifier.weight(1.5f))
+                        Text(Fmt.clock(zoneMs[z]), color = Palette.text, fontSize = 14.sp, modifier = Modifier.weight(0.6f))
+                        androidx.compose.foundation.layout.Box(Modifier.weight(1.4f)) {
+                            androidx.compose.foundation.layout.Box(
+                                Modifier.fillMaxWidth((zoneMs[z].toFloat() / total).coerceIn(0.01f, 1f))
+                                    .height(14.dp).clip(RoundedCornerShape(4.dp)).background(Palette.zone(z))
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "ゾーンは、いまの設定（最大 ${zones.maxHr}・安静時 ${zones.restHr}）で計算しています。トレーニングの目安で、体調や病気の判断に使うものではありません。",
+                    color = Palette.dim, fontSize = 12.sp,
+                )
+            }
+            // これまでの最大より高い値が出たら、更新するかを聞く（一瞬だけの高い値は数えない）
+            val sustained = remember(points) { sustainedMax(points) }
+            if (sustained > settings.maxHr && sustained > declinedMax) {
+                Card {
+                    Text("最大心拍数を更新しますか？", color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "このランで、設定している最大心拍数（${settings.maxHr}）より高い $sustained が続けて出ました。\n" +
+                            "手首で測る心拍数は高く出てしまうこともあるので、いつもよりきつく感じた走りだったときだけ更新してください。",
+                        color = Palette.dim, fontSize = 13.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        BigButton("$sustained に更新する", Modifier.weight(1f), color = Palette.danger) {
+                            settings.maxHrManual = sustained
+                            declinedMax = sustained
+                            reload++
+                        }
+                        SmallButton("しない", Modifier.weight(1f)) {
+                            settings.maxHrDeclined = sustained
+                            declinedMax = sustained
+                        }
+                    }
+                }
+            }
+        }
+        if (points.size >= 2 && (r.hrSource.isEmpty() || r.hrSource == "ヘルスコネクト")) {
+            Card {
+                SectionTitle("心拍数の取り込み")
+                Text(
+                    "走っている最中に心拍数を受け取れなかったときは、Zepp などがヘルスコネクトに書いた心拍数を、このランの時間帯だけ取り込めます。",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+                SmallButton("ヘルスコネクトから心拍数を取り込む", Modifier.fillMaxWidth()) {
+                    scope.launch {
+                        val n = runCatching { withContext(Dispatchers.IO) { HrImport.apply(context, r.id) } }.getOrDefault(0)
+                        hrImportMessage = if (n > 0) "取り込みました（$n 地点に心拍数を付けました）。"
+                        else "この時間帯の心拍数が、ヘルスコネクトに見つかりませんでした。"
+                        reload++
+                    }
+                }
+                hrImportMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
             }
         }
 
@@ -289,6 +379,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 Row {
                     Cell("km", 0.8f, head = true); Cell("ペース", 1.2f, head = true); Cell("登り", 1f, head = true)
                     Cell("下り", 1f, head = true); Cell("歩/分", 1f, head = true)
+                    if (r.avgHr > 0) Cell("心拍", 1f, head = true)
                 }
                 splits.forEach { s ->
                     val full = s.distanceM >= 999
@@ -299,6 +390,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                         Cell("+${Math.round(s.gainM)}", 1f)
                         Cell("-${Math.round(s.lossM)}", 1f)
                         Cell(if (s.steps > 0 && s.movingMs > 0) "${Math.round(s.steps / (s.movingMs / 60000.0))}" else "--", 1f)
+                        if (r.avgHr > 0) Cell(if (s.avgHr > 0) "${s.avgHr}" else "--", 1f)
                     }
                 }
             }
@@ -432,6 +524,29 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("やめる") } },
         )
     }
+}
+
+/** ゾーンごとの時間（ミリ秒）。地点と地点のあいだの時間を、その地点の心拍数のゾーンに足していく */
+private fun zoneTimes(points: List<PointEntity>, zones: HeartZones): LongArray {
+    val out = LongArray(6)
+    for (i in 1 until points.size) {
+        val hr = points[i].hr ?: continue
+        val dt = (points[i].movingMs - points[i - 1].movingMs).coerceIn(0, 30_000)
+        out[zones.zoneOf(hr)] += dt
+    }
+    return out
+}
+
+/** 続けて出た最大の心拍数（5地点続けてその値以上だったもの）。一瞬だけの高い値は数えない */
+private fun sustainedMax(points: List<PointEntity>): Int {
+    val hr = points.mapNotNull { it.hr }
+    if (hr.size < 5) return 0
+    var best = 0
+    for (i in 0..hr.size - 5) {
+        val low = minOf(hr[i], hr[i + 1], hr[i + 2], hr[i + 3], hr[i + 4])
+        if (low > best) best = low
+    }
+    return best
 }
 
 /** 距離ごとのペース（秒/km）。前後をならして、止まっていた所は外す */
