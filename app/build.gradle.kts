@@ -84,7 +84,7 @@ dependencies {
     implementation("androidx.camera:camera-video:1.4.2")
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("androidx.concurrent:concurrent-futures:1.2.0")
-    implementation("com.google.guava:listenablefuture:1.0")
+    implementation("com.google.guava:guava:33.4.0-android")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
