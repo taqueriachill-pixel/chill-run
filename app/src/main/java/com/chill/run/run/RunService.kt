@@ -55,6 +55,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 走っている間ずっと動き続ける常駐サービス。
@@ -151,7 +152,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
         val dao = AppDb.get(this).runDao()
         val elevationSource = if (hasBarometer) "気圧" else "GPS"
-        scope.launch(dbDispatcher) {
+        // サービスがすぐ閉じられても、ランの番号は必ず決まるようにアプリ側の作業場で行う
+        (application as App).scope.launch(dbDispatcher) {
             val id = dao.insertRun(
                 RunEntity(
                     startTime = startWallMs,
@@ -385,8 +387,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     )
                 }
             }
+            // ヘルスコネクトへの書き込みは数秒だけ待つ（遅いときは待たずに記録の画面へ進む）
+            val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
+            withTimeoutOrNull(4000) { hcJob?.join() }
             RunHub.state.value = LiveState(finishedRunId = if (keep) id else -1)
-            if (keep) runCatching { Health.writeRun(context, id) }
             delay(8000)
             sp?.shutdown()
         }

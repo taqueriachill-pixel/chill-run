@@ -64,6 +64,8 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
 
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) = finished()
+
+            @Suppress("OVERRIDE_DEPRECATION")
             override fun onError(utteranceId: String?, errorCode: Int) = finished()
             override fun onStop(utteranceId: String?, interrupted: Boolean) = finished()
         })
