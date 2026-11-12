@@ -1,5 +1,6 @@
 package com.chill.run.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -9,6 +10,8 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.speech.tts.TextToSpeech
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +33,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chill.run.core.Geo
+import com.chill.run.health.BleCheck
 import com.chill.run.health.Health
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -53,6 +57,22 @@ fun CheckScreen(onBack: () -> Unit) {
     var hcText by remember { mutableStateOf<String?>(null) }
     var hcBusy by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var bleText by remember { mutableStateOf<String?>(null) }
+    var bleProgress by remember { mutableStateOf<String?>(null) }
+
+    fun runBleCheck() {
+        bleProgress = "準備しています…"
+        scope.launch {
+            bleText = runCatching { BleCheck.run(context) { bleProgress = it } }
+                .getOrElse { "【心拍数の機器（Bluetooth）】調べられませんでした：${it.message}" }
+            bleProgress = null
+            copied = false
+        }
+    }
+    val bleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result.values.all { it }) runBleCheck()
+        else bleText = "【心拍数の機器（Bluetooth）】「付近のデバイス」の許可が必要です。"
+    }
 
     DisposableEffect(Unit) {
         val listener = object : SensorEventListener {
@@ -122,7 +142,9 @@ fun CheckScreen(onBack: () -> Unit) {
         appendLine("【読み上げ】")
         appendLine(ttsText)
         appendLine()
-        append(hcText ?: "【ヘルスコネクト】まだ調べていません")
+        appendLine(hcText ?: "【ヘルスコネクト】まだ調べていません")
+        appendLine()
+        append(bleText ?: "【心拍数の機器（Bluetooth）】まだ調べていません")
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -157,6 +179,21 @@ fun CheckScreen(onBack: () -> Unit) {
                 }
             }
             hcText?.let { Text(it, color = Palette.text, fontSize = 14.sp, lineHeight = 22.sp) }
+        }
+
+        Card {
+            SectionTitle("心拍数の機器（Bluetooth）")
+            Text(
+                "PowerBuds が心拍数を直接流しているかを調べます（nRF Connect の代わり）。\n" +
+                    "① PowerBuds を両耳に付ける\n② Zepp の「アクティビティ心拍数の共有」をオンにしておく\n③ 下のボタンを押して、1分ほど待つ\n" +
+                    "受け取れなかったときは、Zepp でワークアウトを始めてから、もう一度押してください。",
+                color = Palette.dim, fontSize = 13.sp, lineHeight = 20.sp,
+            )
+            SmallButton(bleProgress ?: "心拍数の機器をさがす", Modifier.fillMaxWidth(), enabled = bleProgress == null) {
+                val perms = arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+                if (perms.all { Perms.has(context, it) }) runBleCheck() else bleLauncher.launch(perms)
+            }
+            bleText?.let { Text(it, color = Palette.text, fontSize = 14.sp, lineHeight = 22.sp) }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

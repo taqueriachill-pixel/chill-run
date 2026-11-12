@@ -262,4 +262,13 @@ class CoreTest {
         assertEquals(170.0, t.cadence(now)!!.toDouble(), 2.0)
         assertEquals(null, t.cadence(now + 10_000))
     }
+
+    @Test
+    fun heart_rate_packet_parsing() {
+        // 1バイト形式：flags=0x00, 152 拍/分
+        assertEquals(152, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x00, 152.toByte())))
+        // 2バイト形式：flags=0x01, 300 = 0x012C
+        assertEquals(300, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x01, 0x2C, 0x01)))
+        assertEquals(null, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x00)))
+    }
 }

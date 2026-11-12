@@ -15,6 +15,12 @@
     <!-- 開始地点の標高を国土地理院に問い合わせる -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 心拍数の機器（イヤホンなど）を Bluetooth でさがして、つなぐ -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
     <!-- ヘルスコネクト：書き込む -->
     <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
     <uses-permission android:name="android.permission.health.WRITE_EXERCISE_ROUTE" />
