@@ -50,32 +50,6 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "0") val courseId: Long = 0,
     /** 自動の判定が選んだ種類と違うときの提案（"TRAIL" か "ROAD"）。なければ空 */
     @ColumnInfo(defaultValue = "") val typeSuggestion: String = "",
-    // ---- ここから段階5で追加 ----
-    @Insert
-    suspend fun insertTrack(track: TrackEntity): Long
-
-    @Update
-    suspend fun updateTrack(track: TrackEntity)
-
-    @Query("SELECT * FROM tracks ORDER BY title")
-    suspend fun tracks(): List<TrackEntity>
-
-    @Query("SELECT * FROM tracks ORDER BY title")
-    fun observeTracks(): Flow<List<TrackEntity>>
-
-    @Query("SELECT * FROM tracks WHERE id = :id")
-    suspend fun track(id: Long): TrackEntity?
-
-    @Query("DELETE FROM tracks WHERE id = :id")
-    suspend fun deleteTrack(id: Long)
-
-    @Query("DELETE FROM tracks")
-    suspend fun deleteAllTracks()
-
-    /** 学習用：これまでの 1km ごとの記録（ペースとケイデンスを出すのに使う） */
-    @Query("SELECT * FROM splits WHERE distanceM >= 999 AND steps > 0 ORDER BY id DESC LIMIT 300")
-    suspend fun recentFullSplits(): List<SplitEntity>
-
     // ---- ここから段階4で追加 ----
     @ColumnInfo(defaultValue = "0") val avgHr: Int = 0,
     @ColumnInfo(defaultValue = "0") val maxHr: Int = 0,
@@ -267,6 +241,32 @@ interface RunDao {
 
     @Query("DELETE FROM laps WHERE runId = :runId")
     suspend fun deleteLaps(runId: Long)
+
+    // ---- ここから段階5で追加 ----
+    @Insert
+    suspend fun insertTrack(track: TrackEntity): Long
+
+    @Update
+    suspend fun updateTrack(track: TrackEntity)
+
+    @Query("SELECT * FROM tracks ORDER BY title")
+    suspend fun tracks(): List<TrackEntity>
+
+    @Query("SELECT * FROM tracks ORDER BY title")
+    fun observeTracks(): Flow<List<TrackEntity>>
+
+    @Query("SELECT * FROM tracks WHERE id = :id")
+    suspend fun track(id: Long): TrackEntity?
+
+    @Query("DELETE FROM tracks WHERE id = :id")
+    suspend fun deleteTrack(id: Long)
+
+    @Query("DELETE FROM tracks")
+    suspend fun deleteAllTracks()
+
+    /** 学習用：これまでの 1km ごとの記録（ペースとケイデンスを出すのに使う） */
+    @Query("SELECT * FROM splits WHERE distanceM >= 999 AND steps > 0 ORDER BY id DESC LIMIT 300")
+    suspend fun recentFullSplits(): List<SplitEntity>
 
     // ---- ここから段階4で追加 ----
     @Query("UPDATE points SET hr = :hr WHERE id = :id")
