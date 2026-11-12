@@ -2,6 +2,7 @@ package com.chill.run.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -188,7 +189,7 @@ fun TileMap(
 private fun MapButton(label: String, onClick: () -> Unit) {
     Box(
         Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xE6FFFFFF))
-            .pointerInput(Unit) { androidx.compose.foundation.gestures.detectTapGestures { onClick() } },
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, color = Color(0xFF222222), fontSize = 22.sp) }
 }
