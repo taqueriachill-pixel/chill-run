@@ -1,0 +1,54 @@
+name: APKを作る
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["docs/**", "README.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+      SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: 計算部分のテスト
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: 鍵がまだ登録されていないとき（動作確認用のビルドだけ行う）
+        if: env.KEYSTORE_BASE64 == ''
+        run: |
+          gradle --no-daemon assembleDebug
+          echo "::warning::署名の鍵（SIGNING_KEYSTORE_BASE64 / SIGNING_PASSWORD）が未登録のため、Releases には置きませんでした。docs/SETUP.md の手順で登録してください。"
+
+      - name: 固定の鍵で署名した APK を作る
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          gradle --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "chill-run-0.1.${GITHUB_RUN_NUMBER}.apk"
+          rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Releases に置く
+        if: env.KEYSTORE_BASE64 != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v0.1.${GITHUB_RUN_NUMBER}" "chill-run-0.1.${GITHUB_RUN_NUMBER}.apk" \
+            --target "$GITHUB_SHA" \
+            --title "Chill Run 0.1.${GITHUB_RUN_NUMBER}" \
+            --notes "ブランチ: ${GITHUB_REF_NAME} / 進み具合は docs/PROGRESS.md を参照。下の .apk をスマホでダウンロードしてインストールしてください。"
