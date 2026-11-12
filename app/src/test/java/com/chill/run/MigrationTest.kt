@@ -48,7 +48,7 @@ class MigrationTest {
                 val f = fields.getJSONObject(k)
                 val name = f.getString("columnName")
                 if (name in before) continue
-                val notNull = f.getBoolean("notNull")
+                val notNull = f.optBoolean("notNull", false)
                 val default = if (f.has("defaultValue")) " DEFAULT ${f.getString("defaultValue")}" else ""
                 val alter = "ALTER TABLE `$table` ADD COLUMN `$name` ${f.getString("affinity")}${if (notNull) " NOT NULL" else ""}$default"
                 assertTrue("$table 表に足す項目 $name の命令が違います。\n設計図: $alter", alter in statements)
