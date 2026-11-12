@@ -31,6 +31,15 @@ data class LiveState(
     val totalReps: Int = 0,
     /** インターバルのメニューを最後までやり終えた */
     val intervalDone: Boolean = false,
+    /** 記録中のランの番号（まだ決まっていないあいだは 0） */
+    val runId: Long = 0,
+    val lat: Double? = null,
+    val lon: Double? = null,
+    /** 声のメモを録音している最中か、と、その経過秒 */
+    val recording: Boolean = false,
+    val recordingSec: Int = 0,
+    /** マイクを使える状態で記録を始められたか */
+    val micReady: Boolean = false,
     /** 終了して保存したランの番号。保存しなかったときは -1 */
     val finishedRunId: Long? = null,
 )

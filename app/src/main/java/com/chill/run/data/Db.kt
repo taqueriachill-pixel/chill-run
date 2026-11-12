@@ -116,6 +116,27 @@ data class SplitEntity(
     val steps: Int,
 )
 
+/** 走っている最中に残した、声のメモ・写真・動画 */
+@Entity(tableName = "media", indices = [Index("runId")])
+data class MediaEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val runId: Long,
+    /** MEMO / PHOTO / VIDEO */
+    val kind: String,
+    val time: Long,
+    /** 残した地点。GPS がまだ取れていなかったときは null */
+    val lat: Double?,
+    val lon: Double?,
+    val distM: Double,
+    /** アプリの中の保存場所からの相対パス */
+    val file: String,
+    /** 声のメモを文字にしたもの（あとから直せる） */
+    val text: String = "",
+    /** 0=まだ文字にしていない 1=文字にできた 2=文字にできなかった */
+    val textState: Int = 0,
+    val durationMs: Long = 0,
+)
+
 @Dao
 interface RunDao {
     @Insert
@@ -191,6 +212,25 @@ interface RunDao {
     @Query("DELETE FROM laps WHERE runId = :runId")
     suspend fun deleteLaps(runId: Long)
 
+    // ---- ここから段階3で追加 ----
+    @Insert
+    suspend fun insertMedia(media: MediaEntity): Long
+
+    @Update
+    suspend fun updateMedia(media: MediaEntity)
+
+    @Query("SELECT * FROM media WHERE runId = :runId ORDER BY time")
+    suspend fun media(runId: Long): List<MediaEntity>
+
+    @Query("SELECT COUNT(*) FROM media WHERE runId = :runId")
+    suspend fun mediaCount(runId: Long): Int
+
+    @Query("DELETE FROM media WHERE id = :id")
+    suspend fun deleteMediaRow(id: Long)
+
+    @Query("DELETE FROM media WHERE runId = :runId")
+    suspend fun deleteMediaOfRun(runId: Long)
+
     @Insert
     suspend fun insertMenu(menu: IntervalMenuEntity): Long
 
@@ -212,14 +252,18 @@ suspend fun RunDao.deleteRun(runId: Long) {
     deletePoints(runId)
     deleteSplits(runId)
     deleteLaps(runId)
+    deleteMediaOfRun(runId)
     deleteRunRow(runId)
     // そのコースのランが1つもなくなったら、コースも片づける
     if (courseId > 0 && runsOfCourse(courseId).isEmpty()) deleteCourse(courseId)
 }
 
 @Database(
-    entities = [RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class, IntervalMenuEntity::class],
-    version = 2,
+    entities = [
+        RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
+        IntervalMenuEntity::class, MediaEntity::class,
+    ],
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -231,7 +275,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { instance = it }
         }
     }
@@ -241,5 +285,12 @@ abstract class AppDb : RoomDatabase() {
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V1_TO_2.forEach { db.execSQL(it) }
+    }
+}
+
+/** 段階2 → 段階3 の「引っ越し」。声のメモ・写真・動画の表を足す */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V2_TO_3.forEach { db.execSQL(it) }
     }
 }

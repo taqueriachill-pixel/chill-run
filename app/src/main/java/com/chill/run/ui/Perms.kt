@@ -13,6 +13,8 @@ object Perms {
     fun location(context: Context) = has(context, Manifest.permission.ACCESS_FINE_LOCATION)
     fun notifications(context: Context) = has(context, Manifest.permission.POST_NOTIFICATIONS)
     fun activity(context: Context) = has(context, Manifest.permission.ACTIVITY_RECOGNITION)
+    fun microphone(context: Context) = has(context, Manifest.permission.RECORD_AUDIO)
+    fun camera(context: Context) = has(context, Manifest.permission.CAMERA)
     fun batteryExempt(context: Context) =
         context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 

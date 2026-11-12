@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -37,11 +38,14 @@ import com.chill.run.core.PhaseKind
 import com.chill.run.data.AppDb
 import com.chill.run.data.CourseEntity
 import com.chill.run.data.LapEntity
+import com.chill.run.data.MediaEntity
+import com.chill.run.data.MediaFiles
 import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
+import com.chill.run.speech.Transcriber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,6 +57,7 @@ private class DetailData(
     val laps: List<LapEntity>,
     val course: CourseEntity?,
     val courseRuns: List<RunEntity>,
+    val media: List<MediaEntity>,
 )
 
 @Composable
@@ -77,8 +82,39 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 laps = dao.laps(runId),
                 course = course,
                 courseRuns = if (course != null) dao.runsOfCourse(course.id) else emptyList(),
+                media = dao.media(runId),
             )
         }
+    }
+
+    var viewing by remember { mutableStateOf<MediaEntity?>(null) }
+    var busyMemo by remember { mutableStateOf(0L) }
+    var memoMessage by remember { mutableStateOf<String?>(null) }
+
+    // まだ文字にしていない声のメモを、1つずつ文字にする（走り終わってからまとめて）
+    val pendingMemos = data?.media?.count { it.kind == MediaFiles.MEMO && it.textState == 0 } ?: 0
+    LaunchedEffect(runId, pendingMemos) {
+        val list = data?.media?.filter { it.kind == MediaFiles.MEMO && it.textState == 0 }.orEmpty()
+        if (list.isEmpty()) return@LaunchedEffect
+        if (!Transcriber.available(context)) {
+            memoMessage = "このスマホには端末内の音声認識がないため、自動では文字にできません。録音は再生できます。"
+            return@LaunchedEffect
+        }
+        if (!Perms.has(context, android.Manifest.permission.RECORD_AUDIO)) {
+            memoMessage = "文字にするには、マイクの許可が必要です（「許可の状態」で許可できます）。"
+            return@LaunchedEffect
+        }
+        memoMessage = null
+        for (m in list) {
+            busyMemo = m.id
+            val result = Transcriber.transcribe(context, MediaFiles.file(context, m.file))
+            withContext(Dispatchers.IO) {
+                dao.updateMedia(m.copy(text = result.getOrDefault(""), textState = if (result.isSuccess) 1 else 2))
+            }
+            if (result.isFailure) memoMessage = "文字にできなかったメモがあります：${result.exceptionOrNull()?.message}"
+        }
+        busyMemo = 0
+        reload++
     }
 
     /** 種類を変える。コースに入っていれば、そのコースの種類として覚える */
@@ -155,7 +191,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         if (points.size >= 2) {
             Card {
                 SectionTitle("地図")
-                RouteMap(points)
+                RouteMap(points, media = d.media, onMediaTap = { viewing = it })
             }
             Card {
                 SectionTitle("グラフ（横軸は距離）")
@@ -179,6 +215,52 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                         minRange = 60.0, inverted = true,
                     )
                 }
+            }
+        }
+
+        // 走りながら残したもの
+        val memos = d.media.filter { it.kind == MediaFiles.MEMO }
+        val pictures = d.media.filter { it.kind != MediaFiles.MEMO }
+        if (memos.isNotEmpty()) {
+            Card {
+                SectionTitle("声のメモ")
+                memoMessage?.let { Text(it, color = Palette.warn, fontSize = 13.sp) }
+                memos.forEach { m ->
+                    MemoRow(
+                        media = m,
+                        busy = busyMemo == m.id,
+                        onEdit = { text ->
+                            scope.launch {
+                                withContext(Dispatchers.IO) { dao.updateMedia(m.copy(text = text, textState = if (text.isNotBlank()) 1 else m.textState)) }
+                                reload++
+                            }
+                        },
+                        onRetry = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { dao.updateMedia(m.copy(text = "", textState = 0)) }
+                                reload++
+                            }
+                        },
+                        onDelete = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { MediaFiles.delete(context, m) }
+                                reload++
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        if (pictures.isNotEmpty()) {
+            Card {
+                SectionTitle("写真・動画")
+                pictures.chunked(3).forEach { rowItems ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowItems.forEach { m -> MediaThumb(m, Modifier.weight(1f)) { viewing = m } }
+                        repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+                Text("このアプリの中だけに保存しています。写真フォルダや SNS に出したいときは、開いて「共有」を押してください。", color = Palette.dim, fontSize = 12.sp)
             }
         }
 
@@ -285,6 +367,30 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         Gap(24)
     }
 
+    // 地図の印や見本を押したとき：写真・動画は大きく表示、声のメモは内容を表示
+    viewing?.let { m ->
+        if (m.kind == MediaFiles.MEMO) {
+            AlertDialog(
+                onDismissRequest = { viewing = null },
+                title = { Text("声のメモ　${whereWhen(m)}") },
+                text = { Text(m.text.ifBlank { "（まだ文字になっていません。下の「声のメモ」の一覧から再生できます）" }) },
+                confirmButton = { TextButton(onClick = { viewing = null }) { Text("閉じる") } },
+            )
+        } else {
+            MediaViewer(
+                media = m,
+                onClose = { viewing = null },
+                onDelete = {
+                    viewing = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) { MediaFiles.delete(context, m) }
+                        reload++
+                    }
+                },
+            )
+        }
+    }
+
     val course = data?.course
     if (renaming && course != null) {
         var name by remember(course.id) { mutableStateOf(course.name) }
@@ -310,12 +416,15 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("この記録を消しますか？") },
-            text = { Text("消すと元に戻せません。（ヘルスコネクトに書き込んだ分は残ります）") },
+            text = { Text("声のメモ・写真・動画も一緒に消えます。元に戻せません。（ヘルスコネクトに書き込んだ分は残ります）") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
                     scope.launch {
-                        withContext(Dispatchers.IO) { dao.deleteRun(runId) }
+                        withContext(Dispatchers.IO) {
+                            dao.deleteRun(runId)
+                            MediaFiles.deleteRunFiles(context, runId)
+                        }
                         onBack()
                     }
                 }) { Text("消す", color = Palette.danger) }

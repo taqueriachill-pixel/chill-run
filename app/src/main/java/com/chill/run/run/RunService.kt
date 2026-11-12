@@ -7,8 +7,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -24,6 +27,7 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import com.chill.run.App
+import com.chill.run.CaptureActivity
 import com.chill.run.R
 import com.chill.run.RunActivity
 import com.chill.run.core.AnnounceText
@@ -39,6 +43,8 @@ import com.chill.run.core.Scenes
 import com.chill.run.core.TrackerEvent
 import com.chill.run.data.AppDb
 import com.chill.run.data.LapEntity
+import com.chill.run.data.MediaEntity
+import com.chill.run.data.MediaFiles
 import com.chill.run.data.PhraseStore
 import com.chill.run.data.PointEntity
 import com.chill.run.data.PostRun
@@ -64,6 +70,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * 走っている間ずっと動き続ける常駐サービス。
  * 画面を消してポケットに入れても、GPS・気圧・歩数を受け取り続ける。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class RunService : Service(), SensorEventListener, LocationListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -95,6 +102,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
     private var calibrationStarted = false
     private var gpsAltSmooth = Double.NaN
 
+    // 声のメモ
+    private val recorder = MemoRecorder()
+    private var micReady = false
+    private var lastLat: Double? = null
+    private var lastLon: Double? = null
+
     // 歩数
     private var lastStepCounter = -1f
     private var tickCount = 0
@@ -122,6 +135,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
             ACTION_PAUSE -> setPaused(true)
             ACTION_RESUME -> setPaused(false)
             ACTION_FINISH -> finishRun()
+            ACTION_MEMO -> toggleMemo()
             else -> {}
         }
         // 記録していないのに呼ばれたときは、何もせず閉じる
@@ -152,8 +166,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
         runId = CompletableDeferred()
 
         // まず常駐の通知を出す（画面が開いている間に始めるので「使用中のみ」の位置情報で動く）
+        // マイクの許可があれば、ロックしたままでも声のメモを録音できるように microphone も付ける
+        micReady = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            startForeground(NOTIFICATION_ID, buildNotification(), types)
         } catch (e: Exception) {
             tracker = null
             RunHub.state.value = LiveState(finishedRunId = -1)
@@ -269,6 +287,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
             calibrateAltitude(Location(location), baroAlt)
         }
 
+        if (accuracy <= RunTracker.MAX_ACCURACY_M) {
+            lastLat = location.latitude
+            lastLon = location.longitude
+        }
         val sample = t.onLocation(now, location.latitude, location.longitude, accuracy, speed) ?: return
         val cadence = t.cadence(SystemClock.elapsedRealtime())
         val wall = System.currentTimeMillis()
@@ -352,8 +374,59 @@ class RunService : Service(), SensorEventListener, LocationListener {
         updateNotification()
     }
 
+    /** 声のメモ：押すと録音を始め、もう一度押すと止める（最長60秒） */
+    private fun toggleMemo() {
+        val t = tracker ?: return
+        if (recorder.recording) {
+            recorder.stop()
+            return
+        }
+        if (!micReady || !runId.isCompleted) {
+            speaker?.say(if (!micReady) "マイクの許可がないので、録音できません" else "もう一度押してください", flush = true)
+            vibrate(600)
+            return
+        }
+        val id = runId.getCompleted()
+        val relative = MediaFiles.newRelativePath(id, MediaFiles.MEMO)
+        val wall = System.currentTimeMillis()
+        val lat = lastLat
+        val lon = lastLon
+        val dist = t.distanceM
+        val sp = speaker
+        // 始まりの合図（音と振動）。合図の音が録音に入らないよう、少し待ってから録り始める
+        sp?.muted = true
+        sp?.chime()
+        vibrate(120)
+        val app = application as App
+        val context = applicationContext
+        scope.launch {
+            delay(450)
+            val started = recorder.start(MediaFiles.file(context, relative), MEMO_MAX_MS) { duration, ok ->
+                // 終わりの合図
+                sp?.muted = false
+                sp?.chime()
+                vibrate(250)
+                if (ok) app.scope.launch(Dispatchers.IO) {
+                    AppDb.get(context).runDao().insertMedia(
+                        MediaEntity(runId = id, kind = MediaFiles.MEMO, time = wall, lat = lat, lon = lon, distM = dist, file = relative, durationMs = duration)
+                    )
+                }
+                publish()
+                updateNotification()
+            }
+            if (!started) {
+                sp?.muted = false
+                sp?.say("録音を始められませんでした", flush = true)
+            }
+            publish()
+            updateNotification()
+        }
+    }
+
     private fun finishRun() {
         val t = tracker ?: run { stopSelf(); return }
+        if (recorder.recording) recorder.stop()
+        speaker?.muted = false
         tracker = null
         ticker?.cancel()
         runCatching { locationManager.removeUpdates(this) }
@@ -387,6 +460,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
             withContext(dispatcher) {
                 if (!keep) {
                     dao.deleteRun(id)
+                    MediaFiles.deleteRunFiles(context, id)
                 } else {
                     val run = dao.getRun(id) ?: return@withContext
                     if (t.laps.isNotEmpty()) dao.insertLaps(t.laps.mapIndexed { i, lap ->
@@ -452,6 +526,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
             phaseRemaining = t.phaseRemaining(),
             totalReps = config.interval?.repeats ?: 0,
             intervalDone = config.interval != null && t.currentPhase == null,
+            runId = if (runId.isCompleted) runId.getCompleted() else 0,
+            lat = lastLat,
+            lon = lastLon,
+            recording = recorder.recording,
+            recordingSec = recorder.elapsedSec,
+            micReady = micReady,
         )
     }
 
@@ -481,6 +561,18 @@ class RunService : Service(), SensorEventListener, LocationListener {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
+            .apply {
+                // 通知の欄にも「メモ」「写真」「動画」のボタンを並べる
+                if (t != null) {
+                    val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    val memo = PendingIntent.getService(this@RunService, 1, Intent(this@RunService, RunService::class.java).setAction(ACTION_MEMO), flags)
+                    val photo = PendingIntent.getActivity(this@RunService, 2, CaptureActivity.intent(this@RunService, video = false), flags)
+                    val video = PendingIntent.getActivity(this@RunService, 3, CaptureActivity.intent(this@RunService, video = true), flags)
+                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_mic), if (recorder.recording) "録音を止める" else "メモ", memo).build())
+                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_camera), "写真", photo).build())
+                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_video), "動画", video).build())
+                }
+            }
             .build()
     }
 
@@ -498,6 +590,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     override fun onDestroy() {
         // 終了の操作なしに止められた場合は、次にアプリを開いたときに App が記録を仕上げる
+        if (recorder.recording) recorder.stop()
         if (tracker != null) {
             tracker = null
             runCatching { locationManager.removeUpdates(this) }
@@ -518,6 +611,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val ACTION_PAUSE = "com.chill.run.PAUSE"
         const val ACTION_RESUME = "com.chill.run.RESUME"
         const val ACTION_FINISH = "com.chill.run.FINISH"
+        const val ACTION_MEMO = "com.chill.run.MEMO"
+        private const val MEMO_MAX_MS = 60_000L
         const val EXTRA_TYPE = "type"
         const val EXTRA_GOAL_KIND = "goalKind"
         const val EXTRA_GOAL_VALUE = "goalValue"

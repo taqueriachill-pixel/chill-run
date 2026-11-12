@@ -57,6 +57,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     var phraseMessage by remember { mutableStateOf<String?>(null) }
     var weightMessage by remember { mutableStateOf<String?>(null) }
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
+    var videoSeconds by remember { mutableIntStateOf(settings.videoSeconds) }
     var trailGain by remember { mutableIntStateOf(settings.trailGainPerKm) }
     var trailSteep by remember { mutableIntStateOf(settings.trailSteepPercent) }
 
@@ -137,6 +138,17 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 }
             }
             phraseMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
+        }
+
+        Card {
+            SectionTitle("走りながら残す")
+            Text("動画の長さ", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "$videoSeconds 秒",
+                onMinus = { videoSeconds = (videoSeconds - 1).coerceAtLeast(3); settings.videoSeconds = videoSeconds },
+                onPlus = { videoSeconds = (videoSeconds + 1).coerceAtMost(5); settings.videoSeconds = videoSeconds },
+            )
+            Text("声のメモは最長60秒。写真・動画・録音は、このアプリの中だけに保存します。", color = Palette.dim, fontSize = 13.sp)
         }
 
         Card {

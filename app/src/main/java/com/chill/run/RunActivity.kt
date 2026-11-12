@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -72,6 +73,9 @@ class RunActivity : ComponentActivity() {
                         RunService.send(this, if (state.manualPaused) RunService.ACTION_RESUME else RunService.ACTION_PAUSE)
                     },
                     onFinish = { RunService.send(this, RunService.ACTION_FINISH) },
+                    onMemo = { RunService.send(this, RunService.ACTION_MEMO) },
+                    onPhoto = { startActivity(CaptureActivity.intent(this, video = false)) },
+                    onVideo = { startActivity(CaptureActivity.intent(this, video = true)) },
                 )
             }
         }
@@ -89,7 +93,14 @@ class RunActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () -> Unit) {
+private fun RunScreen(
+    state: LiveState,
+    onPauseToggle: () -> Unit,
+    onFinish: () -> Unit,
+    onMemo: () -> Unit,
+    onPhoto: () -> Unit,
+    onVideo: () -> Unit,
+) {
     val accent = Palette.of(state.type)
     Column(
         Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().padding(horizontal = 20.dp, vertical = 12.dp),
@@ -138,13 +149,13 @@ private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () 
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Text(Fmt.km(state.distanceM), color = Color.White, fontSize = 104.sp, fontWeight = FontWeight.Black, lineHeight = 104.sp)
+            Text(Fmt.km(state.distanceM), color = Color.White, fontSize = 88.sp, fontWeight = FontWeight.Black, lineHeight = 88.sp)
             Text("km", color = Palette.dim, fontSize = 20.sp)
-            Row(Modifier.fillMaxWidth().padding(top = 20.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                 BigStat("タイム", Fmt.clock(state.movingMs), Modifier.weight(1f))
                 BigStat("ペース /km", Fmt.pace(state.pace), Modifier.weight(1f))
             }
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 BigStat("平均ペース", Fmt.pace(state.avgPace), Modifier.weight(1f), small = true)
                 BigStat("ケイデンス", state.cadence?.toString() ?: "--", Modifier.weight(1f), small = true)
                 BigStat("登り", "+${Math.round(state.gainM)}m", Modifier.weight(1f), small = true)
@@ -155,6 +166,18 @@ private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () 
             )
         }
 
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 走りながら残す：メモ・写真・動画（1回押すだけ。汗や手袋でも押しやすい大きさ）
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TapButton(
+                label = if (state.recording) "止める" else "メモ",
+                sub = if (state.recording) "録音中 ${state.recordingSec}秒" else if (state.micReady) "声を録音" else "マイクの許可なし",
+                color = if (state.recording) Palette.danger else Color(0xFF24506B),
+                modifier = Modifier.weight(1f), onClick = onMemo,
+            )
+            TapButton("写真", "3秒後に撮る", Color(0xFF24506B), Modifier.weight(1f), enabled = !state.recording, onClick = onPhoto)
+            TapButton("動画", "3秒後に撮る", Color(0xFF24506B), Modifier.weight(1f), enabled = !state.recording, onClick = onVideo)
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             HoldButton(
                 label = if (state.manualPaused) "再開" else "一時停止",
@@ -163,6 +186,7 @@ private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () 
                 onHold = onPauseToggle,
             )
             HoldButton(label = "終了", color = Palette.danger, modifier = Modifier.weight(1f), onHold = onFinish)
+        }
         }
     }
 }
@@ -215,7 +239,7 @@ private fun HoldButton(label: String, color: Color, modifier: Modifier = Modifie
     }
     Box(
         modifier = modifier
-            .height(104.dp)
+            .height(96.dp)
             .clip(RoundedCornerShape(22.dp))
             .background(color)
             .pointerInput(Unit) {
@@ -236,6 +260,24 @@ private fun HoldButton(label: String, color: Color, modifier: Modifier = Modifie
                 color = if (hint) Color.White else Color(0xCCFFFFFF),
                 fontSize = 14.sp, textAlign = TextAlign.Center,
             )
+        }
+    }
+}
+
+/** 1回押すだけで動く大きなボタン（メモ・写真・動画） */
+@Composable
+private fun TapButton(label: String, sub: String, color: Color, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .height(100.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(if (enabled) color else Color(0xFF1C262C))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(label, color = if (enabled) Color.White else Palette.dim, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Text(sub, color = Color(0xCCFFFFFF), fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
 }

@@ -21,6 +21,8 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chill.run.core.MapMath
+import com.chill.run.data.MediaEntity
+import com.chill.run.data.MediaFiles
 import com.chill.run.data.PointEntity
 
 private val SLOW = Color(0xFF2E6FE6)  // 遅いところは青
@@ -36,7 +38,12 @@ private class RouteData(
 
 /** 国土地理院の地図の上に、ルートを速さで色分けして描く。1km ごとに小さな数字を置く */
 @Composable
-fun RouteMap(points: List<PointEntity>, modifier: Modifier = Modifier) {
+fun RouteMap(
+    points: List<PointEntity>,
+    modifier: Modifier = Modifier,
+    media: List<MediaEntity> = emptyList(),
+    onMediaTap: (MediaEntity) -> Unit = {},
+) {
     val data = remember(points) {
         val dist = DoubleArray(points.size) { points[it].distM }
         val ms = LongArray(points.size) { points[it].movingMs }
@@ -55,6 +62,8 @@ fun RouteMap(points: List<PointEntity>, modifier: Modifier = Modifier) {
     val state = remember(points) { MapState() }
     val measurer = rememberTextMeasurer()
     val markStyle = TextStyle(color = Color(0xFF1B2A33), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    val mediaStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    val placed = remember(media) { media.filter { it.lat != null && it.lon != null } }
 
     Column {
         TileMap(
@@ -67,6 +76,12 @@ fun RouteMap(points: List<PointEntity>, modifier: Modifier = Modifier) {
                     val zoom = MapMath.fitZoom(minLat, maxLat, minLon, maxLon, w * 0.82, h * 0.82, tilePx)
                     state.moveTo((minLat + maxLat) / 2, (minLon + maxLon) / 2, zoom)
                 }
+            },
+            onTap = { pos, proj ->
+                // 押した場所にいちばん近い印（指の太さぶんの余裕あり）を開く
+                placed.minByOrNull { (proj.toScreen(it.lat!!, it.lon!!) - pos).getDistance() }
+                    ?.takeIf { (proj.toScreen(it.lat!!, it.lon!!) - pos).getDistance() <= 70f }
+                    ?.let(onMediaTap)
             },
         ) { proj ->
             val n = data.lat.size
@@ -92,9 +107,23 @@ fun RouteMap(points: List<PointEntity>, modifier: Modifier = Modifier) {
                 drawCircle(Color.White, 17f, pts[0]); drawCircle(Palette.trail, 11f, pts[0])
                 drawCircle(Color.White, 17f, pts[n - 1]); drawCircle(Palette.danger, 11f, pts[n - 1])
             }
+            // 声のメモ・写真・動画を残した地点の印
+            for (m in placed) {
+                val c = proj.toScreen(m.lat!!, m.lon!!)
+                val (fill, label) = when (m.kind) {
+                    MediaFiles.MEMO -> Color(0xFFB8860B) to "声"
+                    MediaFiles.PHOTO -> Color(0xFF7B3FA0) to "写"
+                    else -> Color(0xFFC0392B) to "動"
+                }
+                drawCircle(Color.White, 30f, c)
+                drawCircle(fill, 26f, c)
+                val layout = measurer.measure(label, mediaStyle)
+                drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f))
+            }
         }
         Text(
-            "線の色：青＝ゆっくり　オレンジ＝速い　／　緑の丸＝スタート　赤の丸＝ゴール　／　数字＝1km ごと",
+            "線の色：青＝ゆっくり　オレンジ＝速い　／　緑の丸＝スタート　赤の丸＝ゴール　／　数字＝1km ごと" +
+                if (placed.isNotEmpty()) "　／　声・写・動＝メモ・写真・動画（押すと開きます）" else "",
             color = Palette.dim, fontSize = 12.sp,
         )
     }

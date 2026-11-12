@@ -3,6 +3,7 @@ package com.chill.run.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,6 +89,7 @@ fun TileMap(
     state: MapState,
     modifier: Modifier = Modifier,
     onReady: (widthPx: Double, heightPx: Double, tilePx: Double) -> Unit = { _, _, _ -> },
+    onTap: ((Offset, MapProjection) -> Unit)? = null,
     overlay: DrawScope.(MapProjection) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -143,8 +146,14 @@ fun TileMap(
     }
 
     Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFFE9E6DF)).onSizeChanged { size = it }) {
+        val currentOnTap by rememberUpdatedState(onTap)
         Canvas(
             Modifier.fillMaxSize().pointerInput(Unit) {
+                detectTapGestures { pos ->
+                    val w = tilePx * 2.0.pow(state.zoom)
+                    currentOnTap?.invoke(pos, MapProjection(state, w, this.size.width.toFloat(), this.size.height.toFloat()))
+                }
+            }.pointerInput(Unit) {
                 detectTransformGestures { centroid, pan, zoomChange, _ ->
                     val oldZoom = state.zoom
                     val newZoom = (oldZoom + log2(zoomChange.toDouble())).coerceIn(MapMath.MIN_ZOOM.toDouble(), 18.9)

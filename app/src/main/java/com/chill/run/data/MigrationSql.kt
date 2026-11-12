@@ -22,4 +22,12 @@ object MigrationSql {
         "CREATE INDEX IF NOT EXISTS `index_laps_runId` ON `laps` (`runId`)",
         "CREATE TABLE IF NOT EXISTS `interval_menus` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `warmupSec` INTEGER NOT NULL, `runByDistance` INTEGER NOT NULL, `runAmount` REAL NOT NULL, `restSec` INTEGER NOT NULL, `repeats` INTEGER NOT NULL, `cooldownSec` INTEGER NOT NULL)",
     )
+
+    /** 段階2 までの runs 表にある項目 */
+    val RUNS_V2_COLUMNS = RUNS_V1_COLUMNS + setOf("elevProfile", "shape", "courseId", "typeSuggestion")
+
+    val V2_TO_3 = listOf(
+        "CREATE TABLE IF NOT EXISTS `media` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `time` INTEGER NOT NULL, `lat` REAL, `lon` REAL, `distM` REAL NOT NULL, `file` TEXT NOT NULL, `text` TEXT NOT NULL, `textState` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS `index_media_runId` ON `media` (`runId`)",
+    )
 }

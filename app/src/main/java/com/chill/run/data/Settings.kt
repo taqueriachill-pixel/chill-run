@@ -81,6 +81,11 @@ class Settings(context: Context) {
         get() = p.getInt("trailSteepPercent", 10)
         set(v) = p.edit().putInt("trailSteepPercent", v).apply()
 
+    /** 動画の長さ（秒） */
+    var videoSeconds: Int
+        get() = p.getInt("videoSeconds", 4)
+        set(v) = p.edit().putInt("videoSeconds", v).apply()
+
     var lastMenuId: Long
         get() = p.getLong("lastMenuId", 0)
         set(v) = p.edit().putLong("lastMenuId", v).apply()

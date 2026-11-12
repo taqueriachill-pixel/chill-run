@@ -58,6 +58,8 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val notifications = remember(refresh) { Perms.notifications(context) }
     val activity = remember(refresh) { Perms.activity(context) }
     val battery = remember(refresh) { Perms.batteryExempt(context) }
+    val microphone = remember(refresh) { Perms.microphone(context) }
+    val camera = remember(refresh) { Perms.camera(context) }
     val hcAvailable = remember { Health.available(context) }
     val hcCount = hcGranted.intersect(Health.allPermissions).size
 
@@ -80,6 +82,16 @@ fun PermissionsScreen(onBack: () -> Unit) {
 
         PermCard("身体活動（歩数センサー）", activity, "ケイデンスと自動の一時停止に使います。", "許可する") {
             single.launch(arrayOf(Manifest.permission.ACTIVITY_RECOGNITION))
+        }
+
+        PermCard(
+            "マイク", microphone,
+            "声のメモの録音と、文字にするのに使います。「アプリの使用時のみ」を選んでください。走り出す前に許可しておく必要があります。",
+            "許可する",
+        ) { single.launch(arrayOf(Manifest.permission.RECORD_AUDIO)) }
+
+        PermCard("カメラ", camera, "走っている最中の写真と動画に使います。「アプリの使用時のみ」を選んでください。", "許可する") {
+            single.launch(arrayOf(Manifest.permission.CAMERA))
         }
 
         PermCard(

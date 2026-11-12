@@ -19,7 +19,7 @@ android {
         minSdk = 34
         targetSdk = 36
         versionCode = buildNumber
-        versionName = "0.2.$buildNumber"
+        versionName = "0.3.$buildNumber"
     }
 
     signingConfigs {
@@ -78,6 +78,11 @@ dependencies {
     implementation("androidx.room:room-ktx:2.8.0")
     ksp("androidx.room:room-compiler:2.8.0")
     implementation("androidx.health.connect:connect-client:1.1.0")
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-video:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

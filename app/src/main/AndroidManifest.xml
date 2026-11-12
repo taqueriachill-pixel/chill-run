@@ -6,7 +6,12 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 声のメモ・写真・動画 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- 歩数センサー -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -44,6 +49,10 @@
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- 声を文字にする、スマホの中の音声認識 -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application
@@ -74,6 +83,26 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true" />
 
+        <!-- 写真・動画を撮る画面。ロックを解除しなくても出せる -->
+        <activity
+            android:name=".CaptureActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+
+        <!-- 写真・動画・録音を、共有メニューからほかのアプリに渡すための出口 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.chill.run.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- ヘルスコネクトの「このアプリのデータの扱い」画面 -->
         <activity
             android:name=".PrivacyActivity"
@@ -92,6 +121,6 @@
         <service
             android:name=".run.RunService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|microphone" />
     </application>
 </manifest>

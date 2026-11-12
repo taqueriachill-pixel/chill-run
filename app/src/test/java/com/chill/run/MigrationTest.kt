@@ -10,25 +10,33 @@ import java.io.File
 /**
  * データベースの「引っ越し」の命令が、アプリの中の表の定義（Room が書き出した設計図）と
  * 一字一句合っているかを確かめる。ずれていると、前の版から上書きしたときに起動できなくなる。
+ *
+ * 設計図は「いまの版」のものしか手元にないので、いまの版で初めて足した表だけを突き合わせる。
+ * 前の版までに足した表は、その版のときにこのテストで確かめ済み。
  */
 class MigrationTest {
-    private fun schema(version: Int): JSONObject {
-        val file = listOf("schemas", "app/schemas").map { File(it, "com.chill.run.data.AppDb/$version.json") }.first { it.exists() }
-        return JSONObject(file.readText()).getJSONObject("database")
+    private fun currentSchema(): JSONObject {
+        val dir = listOf("schemas", "app/schemas").map { File(it, "com.chill.run.data.AppDb") }.first { it.exists() }
+        val latest = dir.listFiles()!!.filter { it.name.endsWith(".json") }.maxBy { it.name.removeSuffix(".json").toInt() }
+        return JSONObject(latest.readText()).getJSONObject("database")
     }
 
     private fun norm(sql: String) = sql.replace(Regex("\\s+"), " ").trim()
 
     @Test
-    fun migration_1_to_2_matches_schema() {
-        val db = schema(2)
-        val statements = MigrationSql.V1_TO_2.map(::norm).toSet()
+    fun latest_migration_matches_schema() {
+        val db = currentSchema()
+        assertEquals("版を上げたら、このテストも新しい引っ越しに合わせて書き足してください", 3, db.getInt("version"))
+        val statements = MigrationSql.V2_TO_3.map(::norm).toSet()
+        val newTables = setOf("media")
+        val knownTables = setOf("runs", "points", "splits", "courses", "laps", "interval_menus") + newTables
+
         val entities = db.getJSONArray("entities")
-        val newTables = setOf("courses", "laps", "interval_menus")
-        var checkedTables = 0
+        var checked = 0
         for (i in 0 until entities.length()) {
             val e = entities.getJSONObject(i)
             val table = e.getString("tableName")
+            assertTrue("知らない表 $table があります。引っ越しを書き忘れていませんか", table in knownTables)
             if (table in newTables) {
                 val create = norm(e.getString("createSql").replace("\${TABLE_NAME}", table))
                 assertTrue("表 $table の作り方が違います。\n設計図: $create", create in statements)
@@ -37,27 +45,19 @@ class MigrationTest {
                     val idx = norm(indices.getJSONObject(k).getString("createSql").replace("\${TABLE_NAME}", table))
                     assertTrue("表 $table の索引が違います。\n設計図: $idx", idx in statements)
                 }
-                checkedTables++
+                checked++
             }
             if (table == "runs") {
+                // 今回は runs 表に項目を足していない。足したのに引っ越しを書き忘れると、ここで気づける
                 val fields = e.getJSONArray("fields")
-                var added = 0
                 for (k in 0 until fields.length()) {
-                    val f = fields.getJSONObject(k)
-                    val name = f.getString("columnName")
-                    if (name in MigrationSql.RUNS_V1_COLUMNS) continue
-                    val notNull = if (f.getBoolean("notNull")) " NOT NULL" else ""
-                    val default = if (f.has("defaultValue")) " DEFAULT ${f.getString("defaultValue")}" else ""
-                    val alter = "ALTER TABLE `runs` ADD COLUMN `$name` ${f.getString("affinity")}$notNull$default"
-                    assertTrue("runs 表に足す項目 $name の命令が違います。\n設計図: $alter", alter in statements)
-                    assertTrue("あとから足す項目 $name には初期値が必要です", f.has("defaultValue"))
-                    added++
+                    val name = fields.getJSONObject(k).getString("columnName")
+                    assertTrue("runs 表に新しい項目 $name があります。引っ越しを書いてください", name in MigrationSql.RUNS_V2_COLUMNS)
                 }
-                assertEquals(4, added)
+                assertEquals(MigrationSql.RUNS_V2_COLUMNS.size, fields.length())
             }
         }
-        assertEquals(newTables.size, checkedTables)
-        // 段階1 からある表は、引っ越しで触らない（points と splits は形を変えていない）
-        assertEquals(6, entities.length())
+        assertEquals(newTables.size, checked)
+        assertEquals(knownTables.size, entities.length())
     }
 }

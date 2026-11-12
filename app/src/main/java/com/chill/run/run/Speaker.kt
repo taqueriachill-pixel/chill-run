@@ -90,8 +90,12 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
     }
 
     /** flush = true なら、話している途中のものを止めてすぐ話す */
+    /** true のあいだは話さない（声のメモの録音に、お知らせの声が入らないように） */
+    @Volatile
+    var muted = false
+
     fun say(text: String, flush: Boolean = false) {
-        if (text.isBlank()) return
+        if (text.isBlank() || muted) return
         synchronized(pending) {
             if (!ready) {
                 pending += text to flush

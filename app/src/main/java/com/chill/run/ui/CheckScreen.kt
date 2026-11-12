@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import com.chill.run.core.Geo
 import com.chill.run.health.BleCheck
 import com.chill.run.health.Health
+import com.chill.run.run.MemoRecorder
+import com.chill.run.speech.Transcriber
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -57,6 +60,45 @@ fun CheckScreen(onBack: () -> Unit) {
     var hcText by remember { mutableStateOf<String?>(null) }
     var hcBusy by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    var speechSupport by remember { mutableStateOf("調べています…") }
+    var speechTest by remember { mutableStateOf<String?>(null) }
+    var speechBusy by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { speechSupport = Transcriber.supportReport(context) }
+
+    /** 5秒録音して、その録音ファイルを文字にしてみる（走っている最中の声のメモと同じやり方） */
+    fun runSpeechTest() {
+        val file = java.io.File(context.cacheDir, "speech_test.wav")
+        val recorder = MemoRecorder()
+        speechBusy = "録音中…（5秒、何か話してください）"
+        val started = recorder.start(file, 5000) { _, ok ->
+            if (!ok) {
+                speechTest = "×　録音できませんでした。"
+                speechBusy = null
+            } else {
+                speechBusy = "文字にしています…"
+                scope.launch {
+                    val startMs = System.currentTimeMillis()
+                    val result = Transcriber.transcribe(context, file)
+                    val sec = (System.currentTimeMillis() - startMs) / 1000.0
+                    speechTest = result.fold(
+                        { "✓　文字にできました（%.1f秒かかりました）：「%s」".format(sec, it) },
+                        { "×　文字にできませんでした：${it.message}" },
+                    )
+                    speechBusy = null
+                    copied = false
+                    file.delete()
+                }
+            }
+        }
+        if (!started) {
+            speechTest = "×　録音を始められませんでした。"
+            speechBusy = null
+        }
+    }
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) runSpeechTest() else speechTest = "マイクの許可が必要です。"
+    }
+
     var bleText by remember { mutableStateOf<String?>(null) }
     var bleProgress by remember { mutableStateOf<String?>(null) }
 
@@ -142,6 +184,10 @@ fun CheckScreen(onBack: () -> Unit) {
         appendLine("【読み上げ】")
         appendLine(ttsText)
         appendLine()
+        appendLine("【声を文字にする（端末内の音声認識）】")
+        appendLine(speechSupport)
+        appendLine(speechTest ?: "録音からの文字化：まだ試していません")
+        appendLine()
         appendLine(hcText ?: "【ヘルスコネクト】まだ調べていません")
         appendLine()
         append(bleText ?: "【心拍数の機器（Bluetooth）】まだ調べていません")
@@ -161,6 +207,23 @@ fun CheckScreen(onBack: () -> Unit) {
             Text(ttsText, color = Palette.text, fontSize = 14.sp, lineHeight = 22.sp)
             SmallButton("読み上げの設定を開く", Modifier.fillMaxWidth()) {
                 runCatching { context.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+        }
+
+        Card {
+            SectionTitle("声を文字にする")
+            Text(speechSupport, color = Palette.text, fontSize = 14.sp, lineHeight = 22.sp)
+            Text(
+                "下のボタンを押して、5秒のあいだ「今日は生田緑地を走っています」のように話してください。録音したものを、通信を使わずに文字にできるかを試します。機内モードにして試すと確実です。",
+                color = Palette.dim, fontSize = 13.sp, lineHeight = 20.sp,
+            )
+            SmallButton(speechBusy ?: "5秒話して試す", Modifier.fillMaxWidth(), enabled = speechBusy == null) {
+                if (Perms.microphone(context)) runSpeechTest() else micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            speechTest?.let { Text(it, color = Palette.text, fontSize = 14.sp, lineHeight = 22.sp) }
+            SmallButton("日本語のデータを入れる（「データが入っていません」と出たとき）", Modifier.fillMaxWidth()) {
+                Transcriber.requestJapaneseModel(context)
+                speechTest = "ダウンロードを頼みました。数分待ってから、この画面を開き直してください。"
             }
         }
 
