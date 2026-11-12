@@ -80,6 +80,8 @@ class CaptureActivity : ComponentActivity() {
     private var message by mutableStateOf("")
     private var cameraReady by mutableStateOf(false)
     private var started = false
+    private var stabilized = false
+    private var stabilizeNote by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,8 +115,8 @@ class CaptureActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            if (isVideo) "動画（${Settings(this@CaptureActivity).videoSeconds}秒）" else "写真",
-                            color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                            if (isVideo) "動画（${Settings(this@CaptureActivity).videoSeconds}秒）" + (if (stabilizeNote.isNotEmpty()) "\n$stabilizeNote" else "") else "写真",
+                            color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
                         )
                         Text(
                             when (phase) {
@@ -159,14 +161,41 @@ class CaptureActivity : ComponentActivity() {
         future.addListener({
             try {
                 val provider = future.get()
-                val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                 provider.unbindAll()
                 if (isVideo) {
                     val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HD)).build()
-                    val vc = VideoCapture.withOutput(recorder)
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, vc)
-                    videoCapture = vc
+                    // 手ブレ補正：このスマホのカメラが対応していれば使う（映る範囲が少しせまくなる）
+                    val info = CameraSelector.DEFAULT_BACK_CAMERA.filter(provider.availableCameraInfos).firstOrNull()
+                    val wanted = Settings(this).videoStabilize
+                    val videoOk = wanted && info != null &&
+                        runCatching { Recorder.getVideoCapabilities(info).isStabilizationSupported }.getOrDefault(false)
+                    val previewOk = videoOk && info != null &&
+                        runCatching { Preview.getPreviewCapabilities(info).isStabilizationSupported }.getOrDefault(false)
+                    fun bind(stabilize: Boolean) {
+                        val preview = Preview.Builder()
+                            .apply { if (stabilize && previewOk) setPreviewStabilizationEnabled(true) }
+                            .build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                        val vc = VideoCapture.Builder(recorder)
+                            .apply { if (stabilize) setVideoStabilizationEnabled(true) }
+                            .build()
+                        provider.unbindAll()
+                        provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, vc)
+                        videoCapture = vc
+                        stabilized = stabilize
+                    }
+                    try {
+                        bind(videoOk)
+                    } catch (e: Exception) {
+                        // 手ブレ補正つきで開けなかったら、補正なしで開き直す
+                        if (videoOk) bind(false) else throw e
+                    }
+                    stabilizeNote = when {
+                        stabilized -> "手ブレ補正あり"
+                        !wanted -> "手ブレ補正なし（設定でオフ）"
+                        else -> "手ブレ補正なし（このカメラは非対応）"
+                    }
                 } else {
+                    val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                     val ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
                     provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, ic)
                     imageCapture = ic

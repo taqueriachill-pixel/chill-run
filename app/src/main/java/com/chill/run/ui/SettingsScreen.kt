@@ -59,6 +59,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     var weightMessage by remember { mutableStateOf<String?>(null) }
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
     var videoSeconds by remember { mutableIntStateOf(settings.videoSeconds) }
+    var videoStabilize by remember { mutableStateOf(settings.videoStabilize) }
     var sayHeart by remember { mutableStateOf(settings.sayHeart) }
     var restHr by remember { mutableIntStateOf(settings.restHr) }
     var maxManual by remember { mutableIntStateOf(settings.maxHrManual) }
@@ -246,6 +247,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 onMinus = { videoSeconds = (videoSeconds - 1).coerceAtLeast(3); settings.videoSeconds = videoSeconds },
                 onPlus = { videoSeconds = (videoSeconds + 1).coerceAtMost(5); settings.videoSeconds = videoSeconds },
             )
+            SwitchRow("動画の手ブレ補正（映る範囲が少しせまくなります）", videoStabilize) { videoStabilize = it; settings.videoStabilize = it }
             Text("声のメモは最長60秒。写真・動画・録音は、このアプリの中だけに保存します。", color = Palette.dim, fontSize = 13.sp)
         }
 

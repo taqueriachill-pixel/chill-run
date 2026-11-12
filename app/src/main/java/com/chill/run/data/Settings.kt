@@ -87,6 +87,11 @@ class Settings(context: Context) {
         get() = p.getInt("videoSeconds", 4)
         set(v) = p.edit().putInt("videoSeconds", v).apply()
 
+    /** 動画の手ブレ補正を使うか */
+    var videoStabilize: Boolean
+        get() = p.getBoolean("videoStabilize", true)
+        set(v) = p.edit().putBoolean("videoStabilize", v).apply()
+
     // ---- 心拍数 ----
     /** 心拍数を受け取る機器（時計など）の番号と名前。選んでいなければ空 */
     var hrDeviceAddress: String
