@@ -1,0 +1,50 @@
+package com.chill.run.run
+
+import com.chill.run.core.GoalKind
+import com.chill.run.core.Phase
+import com.chill.run.core.RunType
+import kotlinx.coroutines.flow.MutableStateFlow
+
+/** 走っている最中の、画面に出す値 */
+data class LiveState(
+    val active: Boolean = false,
+    val type: RunType = RunType.ROAD,
+    val goalKind: GoalKind = GoalKind.FREE,
+    val goalValue: Double = 0.0,
+    val distanceM: Double = 0.0,
+    val movingMs: Long = 0,
+    val pace: Double? = null,
+    val avgPace: Double? = null,
+    val cadence: Int? = null,
+    val altitudeM: Double? = null,
+    val gainM: Double = 0.0,
+    val lossM: Double = 0.0,
+    val manualPaused: Boolean = false,
+    val autoPaused: Boolean = false,
+    val gpsAccuracyM: Float? = null,
+    val elevationSource: String = "",
+    val goalReached: Boolean = false,
+    /** インターバル中の、いまの区間（なければ null） */
+    val phase: Phase? = null,
+    /** いまの区間の残り。時間なら秒、距離ならメートル */
+    val phaseRemaining: Double? = null,
+    val totalReps: Int = 0,
+    /** インターバルのメニューを最後までやり終えた */
+    val intervalDone: Boolean = false,
+    /** 記録中のランの番号（まだ決まっていないあいだは 0） */
+    val runId: Long = 0,
+    val lat: Double? = null,
+    val lon: Double? = null,
+    /** 声のメモを録音している最中か、と、その経過秒 */
+    val recording: Boolean = false,
+    val recordingSec: Int = 0,
+    /** マイクを使える状態で記録を始められたか */
+    val micReady: Boolean = false,
+    /** 終了して保存したランの番号。保存しなかったときは -1 */
+    val finishedRunId: Long? = null,
+)
+
+/** 常駐サービスと画面のあいだで、いまの状態を受け渡す場所 */
+object RunHub {
+    val state = MutableStateFlow(LiveState())
+}
