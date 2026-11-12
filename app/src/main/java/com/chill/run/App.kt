@@ -5,6 +5,7 @@ import com.chill.run.core.ElevationGain
 import com.chill.run.core.RunTracker
 import com.chill.run.data.AppDb
 import com.chill.run.data.PointEntity
+import com.chill.run.data.PostRun
 import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
@@ -20,7 +21,11 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        scope.launch(Dispatchers.IO) { recoverUnfinishedRuns() }
+        scope.launch(Dispatchers.IO) {
+            recoverUnfinishedRuns()
+            // 前の版で記録したランにも、地図用の下ごしらえとコースのまとめを行う
+            if (!RunHub.state.value.active) PostRun.backfill(this@App)
+        }
     }
 
     /** アプリが途中で落ちたときの記録を、保存済みの地点から仕上げる */

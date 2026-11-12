@@ -266,9 +266,155 @@ class CoreTest {
     @Test
     fun heart_rate_packet_parsing() {
         // 1バイト形式：flags=0x00, 152 拍/分
-        assertEquals(152, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x00, 152.toByte())))
+        assertEquals(152, HeartRate.parse(byteArrayOf(0x00, 152.toByte())))
         // 2バイト形式：flags=0x01, 300 = 0x012C
-        assertEquals(300, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x01, 0x2C, 0x01)))
-        assertEquals(null, com.chill.run.health.BleCheck.parseHeartRate(byteArrayOf(0x00)))
+        assertEquals(300, HeartRate.parse(byteArrayOf(0x01, 0x2C, 0x01)))
+        assertEquals(null, HeartRate.parse(byteArrayOf(0x00)))
+    }
+
+    // ---- 段階2 ----
+
+    @Test
+    fun mercator_round_trip_and_tiles() {
+        val lat = 35.6069; val lon = 139.5497 // 生田緑地のあたり
+        assertEquals(lat, MapMath.yToLat(MapMath.latToY(lat)), 1e-9)
+        assertEquals(lon, MapMath.xToLon(MapMath.lonToX(lon)), 1e-9)
+        // 東京駅付近のタイル番号（ズーム15）は x=29105, y=12903 あたり
+        val t = MapMath.tileAt(35.681, 139.767, 15)
+        assertEquals(29105, t.x)
+        assertEquals(12903, t.y)
+        val tiles = MapMath.tilesAround(lat, lon, 3000.0, 12..16)
+        assertTrue(tiles.size in 100..1500)
+        assertTrue(tiles.any { it == MapMath.tileAt(lat, lon, 16) })
+    }
+
+    @Test
+    fun fit_zoom_contains_route() {
+        val z = MapMath.fitZoom(35.60, 35.61, 139.54, 139.56, 1000.0, 800.0, 256.0)
+        val w = (MapMath.lonToX(139.56) - MapMath.lonToX(139.54)) * 256 * Math.pow(2.0, z)
+        val h = (MapMath.latToY(35.60) - MapMath.latToY(35.61)) * 256 * Math.pow(2.0, z)
+        assertTrue(w <= 1000.0 + 1e-6 && h <= 800.0 + 1e-6)
+        assertTrue(w > 900.0 || h > 700.0)
+    }
+
+    @Test
+    fun speed_fractions_slow_is_low_fast_is_high() {
+        val n = 200
+        val dist = DoubleArray(n)
+        val ms = LongArray(n)
+        for (i in 1 until n) {
+            ms[i] = i * 1000L
+            dist[i] = dist[i - 1] + if (i < 100) 2.0 else 4.0 // 前半は遅く、後半は速い
+        }
+        val f = MapMath.speedFractions(dist, ms)
+        assertTrue(f[30] < 0.1f)
+        assertTrue(f[170] > 0.9f)
+        assertEquals(listOf(1 to 0), MapMath.kmMarks(doubleArrayOf(1000.0)).map { it.first to it.second })
+        val marks = MapMath.kmMarks(DoubleArray(301) { it * 10.0 })
+        assertEquals(listOf(1, 2, 3), marks.map { it.first })
+        assertEquals(100, marks[0].second)
+    }
+
+    @Test
+    fun steep_fraction_and_trail_judgement() {
+        // 1km 平ら → 500m で 60m 登る（勾配12%）→ 500m 平ら
+        val dist = DoubleArray(201) { it * 10.0 }
+        val alt = DoubleArray(201) { i -> when { i <= 100 -> 20.0; i <= 150 -> 20.0 + (i - 100) * 1.2; else -> 80.0 } }
+        val steep = RouteAnalysis.steepFraction(dist, alt)
+        assertEquals(0.25, steep, 0.03)
+        assertTrue(RouteAnalysis.looksLikeTrail(2000.0, 60.0, steep, 15.0, 10.0))
+        assertFalse(RouteAnalysis.looksLikeTrail(2000.0, 10.0, 0.0, 15.0, 10.0))
+        // 登りは多いが坂が短い（ゆるい長い登り）はトレイルにしない
+        assertFalse(RouteAnalysis.looksLikeTrail(2000.0, 60.0, 0.02, 15.0, 10.0))
+    }
+
+    private fun line(lat0: Double, lon0: Double, lat1: Double, lon1: Double, n: Int = 100): List<LatLon> =
+        (0..n).map { LatLon(lat0 + (lat1 - lat0) * it / n, lon0 + (lon1 - lon0) * it / n) }
+
+    @Test
+    fun course_matching() {
+        val a = line(35.600, 139.540, 35.620, 139.540)                 // 北へ約2.2km
+        val same = line(35.6001, 139.5402, 35.6199, 139.5401)          // ほぼ同じ道
+        val reverse = a.reversed()                                     // 逆向き（スタートとゴールが逆）
+        val other = line(35.600, 139.540, 35.600, 139.565)             // 東へ
+        val half = line(35.600, 139.540, 35.610, 139.540)              // 途中まで
+        assertTrue(RouteAnalysis.sameCourse(a, same))
+        assertFalse(RouteAnalysis.sameCourse(a, reverse))
+        assertFalse(RouteAnalysis.sameCourse(a, other))
+        assertFalse(RouteAnalysis.sameCourse(a, half))
+        assertEquals(a.size, RouteAnalysis.decode(RouteAnalysis.encode(a)).size)
+        assertEquals(35.6, RouteAnalysis.decode(RouteAnalysis.encode(a)).first().lat, 1e-5)
+    }
+
+    @Test
+    fun resample_and_profile() {
+        val n = 1001
+        val lat = DoubleArray(n) { 35.6 + it * 0.00001 }
+        val lon = DoubleArray(n) { 139.5 }
+        val dist = DoubleArray(n) { it * 1.112 }
+        val shape = RouteAnalysis.resample(lat, lon, dist, 50.0)
+        assertTrue(shape.size in 20..25)
+        assertEquals(lat.last(), shape.last().lat, 1e-12)
+        val prof = RouteAnalysis.elevationProfile(dist, DoubleArray(n) { it * 0.1 }, 40)
+        assertEquals(40, prof.size)
+        assertEquals(0f, prof.first(), 0.01f)
+        assertEquals(100f, prof.last(), 0.2f)
+        assertEquals(prof.size, RouteAnalysis.decodeProfile(RouteAnalysis.encodeProfile(prof)).size)
+    }
+
+    @Test
+    fun interval_phases_and_events() {
+        val plan = IntervalPlan(warmupSec = 60, runByDistance = false, runAmount = 30.0, restSec = 20, repeats = 3, cooldownSec = 40)
+        assertEquals(
+            listOf(PhaseKind.WARMUP, PhaseKind.RUN, PhaseKind.REST, PhaseKind.RUN, PhaseKind.REST, PhaseKind.RUN, PhaseKind.COOLDOWN),
+            plan.phases().map { it.kind },
+        )
+        val t = RunTracker(RunConfig(autoPause = false, goalKind = GoalKind.INTERVAL, announceEvery = 0.0, interval = plan))
+        t.tick(0)
+        assertEquals(PhaseKind.WARMUP, t.currentPhase!!.kind)
+        run(t, 0, 60 + 30 + 20 + 30 + 20 + 30 + 40 + 5, 3.0)
+        val changes = lastEvents.filterIsInstance<TrackerEvent.PhaseChange>()
+        assertEquals(7, changes.size)
+        assertEquals(listOf(PhaseKind.RUN, PhaseKind.REST, PhaseKind.RUN, PhaseKind.REST, PhaseKind.RUN, PhaseKind.COOLDOWN, null), changes.map { it.next?.kind })
+        // 切り替えごとに 3、2、1
+        val cds = lastEvents.filterIsInstance<TrackerEvent.PhaseCountdown>().map { it.seconds }
+        assertEquals(List(7) { listOf(3, 2, 1) }.flatten(), cds)
+        assertEquals(7, t.laps.size)
+        val runLaps = t.laps.filter { it.kind == PhaseKind.RUN }
+        assertEquals(3, runLaps.size)
+        assertEquals(30_000L, runLaps[0].movingMs)
+        assertEquals(90.0, runLaps[0].distanceM, 8.0)
+        assertEquals(null, t.currentPhase)
+        t.finish()
+        assertEquals(7, t.laps.size)
+        assertTrue(AnnounceText.phaseChange(changes[1]).startsWith("ゆっくり。1本目はペース5分3"))
+        assertTrue(AnnounceText.phaseChange(changes[4]).startsWith("走る、ラスト1本。"))
+        assertTrue(AnnounceText.phaseChange(changes[5]).startsWith("クールダウン。3本目はペース"))
+        assertEquals("メニュー終了、おつかれさま。", AnnounceText.phaseChange(changes[6]))
+    }
+
+    @Test
+    fun interval_by_distance() {
+        val plan = IntervalPlan(runByDistance = true, runAmount = 200.0, restSec = 30, repeats = 2)
+        val t = RunTracker(RunConfig(autoPause = false, goalKind = GoalKind.INTERVAL, announceEvery = 0.0, interval = plan))
+        t.tick(0)
+        run(t, 0, 200, 4.0)
+        val changes = lastEvents.filterIsInstance<TrackerEvent.PhaseChange>()
+        assertEquals(listOf(PhaseKind.REST, PhaseKind.RUN, null), changes.map { it.next?.kind })
+        assertEquals(200.0, t.laps[0].distanceM, 6.0)
+        assertEquals(50_000.0, t.laps[0].movingMs.toDouble(), 2000.0)
+        assertTrue(lastEvents.filterIsInstance<TrackerEvent.PhaseCountdown>().isNotEmpty())
+    }
+
+    @Test
+    fun trail_announcement_includes_climb() {
+        val cfg = RunConfig(type = RunType.TRAIL)
+        val ev = TrackerEvent.Interval(2, 2000.0, 800_000, 420.0, 380.0, gainM = 42.0, lossM = 6.0)
+        assertEquals(Scenes.CLIMB, AnnounceText.scene(ev, cfg))
+        val text = AnnounceText.interval(ev, cfg, AnnounceOptions(cheer = false), PhraseBook(emptyMap()))
+        assertTrue(text, text.endsWith("登り42メートル、下り6メートル。"))
+        // ロードでは登りを言わない
+        val road = AnnounceText.interval(ev, RunConfig(), AnnounceOptions(cheer = false), PhraseBook(emptyMap()))
+        assertFalse(road, road.contains("登り"))
     }
 }

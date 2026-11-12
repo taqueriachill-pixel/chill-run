@@ -30,6 +30,7 @@ import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
 import com.chill.run.core.Geo
 import com.chill.run.core.GoalKind
+import com.chill.run.core.IntervalPlan
 import com.chill.run.core.PhraseBook
 import com.chill.run.core.RunConfig
 import com.chill.run.core.RunTracker
@@ -37,8 +38,10 @@ import com.chill.run.core.RunType
 import com.chill.run.core.Scenes
 import com.chill.run.core.TrackerEvent
 import com.chill.run.data.AppDb
+import com.chill.run.data.LapEntity
 import com.chill.run.data.PhraseStore
 import com.chill.run.data.PointEntity
+import com.chill.run.data.PostRun
 import com.chill.run.data.RunEntity
 import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
@@ -134,7 +137,15 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
         val pressureSensor = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)
         hasBarometer = pressureSensor != null
-        config = settings.runConfig(type, goalKind, goalValue, hasBarometer)
+        val plan = if (goalKind == GoalKind.INTERVAL) IntervalPlan(
+            warmupSec = intent.getIntExtra(EXTRA_WARMUP, 0),
+            runByDistance = intent.getBooleanExtra(EXTRA_RUN_BY_DISTANCE, false),
+            runAmount = intent.getDoubleExtra(EXTRA_RUN_AMOUNT, 60.0),
+            restSec = intent.getIntExtra(EXTRA_REST, 60),
+            repeats = intent.getIntExtra(EXTRA_REPEATS, 5),
+            cooldownSec = intent.getIntExtra(EXTRA_COOLDOWN, 0),
+        ) else null
+        config = settings.runConfig(type, goalKind, goalValue, hasBarometer, plan)
         val t = RunTracker(config)
         tracker = t
         startWallMs = System.currentTimeMillis()
@@ -184,7 +195,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
         }
 
         publish()
-        if (settings.announceOn) speaker?.say("スタート")
+        if (settings.announceOn) {
+            val first = t.currentPhase
+            speaker?.say(if (first != null) "スタート。" + AnnounceText.phaseStart(first, plan?.repeats ?: 0) else "スタート")
+        }
 
         t.tick(SystemClock.elapsedRealtime())
         ticker = scope.launch {
@@ -225,6 +239,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 sp.say("目標達成！" + (phrases.pick(Scenes.GOAL) ?: ""), flush = true)
             }
             is TrackerEvent.AutoPause -> {}
+            is TrackerEvent.PhaseCountdown -> if (on) sp.say(ev.seconds.toString(), flush = true)
+            is TrackerEvent.PhaseChange -> {
+                // 切り替わりは、声を切っていても振動で分かるようにする
+                vibrate(if (ev.next == null) 800 else 500)
+                if (on) sp.say(AnnounceText.phaseChange(ev), flush = true)
+            }
         }
     }
 
@@ -369,6 +389,9 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     dao.deleteRun(id)
                 } else {
                     val run = dao.getRun(id) ?: return@withContext
+                    if (t.laps.isNotEmpty()) dao.insertLaps(t.laps.mapIndexed { i, lap ->
+                        LapEntity(runId = id, idx = i + 1, kind = lap.kind.name, rep = lap.rep, distanceM = lap.distanceM, movingMs = lap.movingMs)
+                    })
                     dao.insertSplits(t.splits.map {
                         SplitEntity(runId = id, idx = it.index, distanceM = it.distanceM, movingMs = it.movingMs, gainM = it.gainM, lossM = it.lossM, steps = it.steps)
                     })
@@ -387,6 +410,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     )
                 }
             }
+            // 地図用の下ごしらえ、いつものコース、ロードかトレイルかの判定
+            if (keep) runCatching { withContext(dispatcher) { PostRun.analyze(context, id) } }
             // ヘルスコネクトへの書き込みは数秒だけ待つ（遅いときは待たずに記録の画面へ進む）
             val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
             withTimeoutOrNull(4000) { hcJob?.join() }
@@ -423,6 +448,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
             gpsAccuracyM = t.lastAccuracyM,
             elevationSource = if (hasBarometer) "気圧" else "GPS",
             goalReached = t.goalReached,
+            phase = t.currentPhase,
+            phaseRemaining = t.phaseRemaining(),
+            totalReps = config.interval?.repeats ?: 0,
+            intervalDone = config.interval != null && t.currentPhase == null,
         )
     }
 
@@ -492,16 +521,29 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val EXTRA_TYPE = "type"
         const val EXTRA_GOAL_KIND = "goalKind"
         const val EXTRA_GOAL_VALUE = "goalValue"
+        const val EXTRA_WARMUP = "warmupSec"
+        const val EXTRA_RUN_BY_DISTANCE = "runByDistance"
+        const val EXTRA_RUN_AMOUNT = "runAmount"
+        const val EXTRA_REST = "restSec"
+        const val EXTRA_REPEATS = "repeats"
+        const val EXTRA_COOLDOWN = "cooldownSec"
 
-        fun start(context: Context, type: RunType, goalKind: GoalKind, goalValue: Double) {
+        fun start(context: Context, type: RunType, goalKind: GoalKind, goalValue: Double, plan: IntervalPlan? = null) {
             RunHub.state.value = LiveState(active = true, type = type, goalKind = goalKind, goalValue = goalValue)
-            context.startForegroundService(
-                Intent(context, RunService::class.java)
-                    .setAction(ACTION_START)
-                    .putExtra(EXTRA_TYPE, type.name)
-                    .putExtra(EXTRA_GOAL_KIND, goalKind.name)
-                    .putExtra(EXTRA_GOAL_VALUE, goalValue)
-            )
+            val intent = Intent(context, RunService::class.java)
+                .setAction(ACTION_START)
+                .putExtra(EXTRA_TYPE, type.name)
+                .putExtra(EXTRA_GOAL_KIND, goalKind.name)
+                .putExtra(EXTRA_GOAL_VALUE, goalValue)
+            if (plan != null) {
+                intent.putExtra(EXTRA_WARMUP, plan.warmupSec)
+                    .putExtra(EXTRA_RUN_BY_DISTANCE, plan.runByDistance)
+                    .putExtra(EXTRA_RUN_AMOUNT, plan.runAmount)
+                    .putExtra(EXTRA_REST, plan.restSec)
+                    .putExtra(EXTRA_REPEATS, plan.repeats)
+                    .putExtra(EXTRA_COOLDOWN, plan.cooldownSec)
+            }
+            context.startForegroundService(intent)
         }
 
         fun send(context: Context, action: String) {

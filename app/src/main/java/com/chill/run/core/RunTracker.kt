@@ -1,7 +1,39 @@
 package com.chill.run.core
 
 enum class RunType { ROAD, TRAIL }
-enum class GoalKind { FREE, DISTANCE, TIME }
+enum class GoalKind { FREE, DISTANCE, TIME, INTERVAL }
+enum class PhaseKind { WARMUP, RUN, REST, COOLDOWN }
+
+/** インターバルの1区間。amount は、時間なら秒、距離ならメートル */
+data class Phase(val kind: PhaseKind, val byDistance: Boolean, val amount: Double, val rep: Int)
+
+/** インターバルのメニュー */
+data class IntervalPlan(
+    val warmupSec: Int = 0,
+    val runByDistance: Boolean = false,
+    /** 走る区間。時間なら秒、距離ならメートル */
+    val runAmount: Double = 60.0,
+    val restSec: Int = 60,
+    val repeats: Int = 5,
+    val cooldownSec: Int = 0,
+) {
+    fun phases(): List<Phase> {
+        val out = ArrayList<Phase>()
+        if (warmupSec > 0) out += Phase(PhaseKind.WARMUP, false, warmupSec.toDouble(), 0)
+        for (r in 1..repeats.coerceAtLeast(1)) {
+            out += Phase(PhaseKind.RUN, runByDistance, runAmount, r)
+            // 最後の1本のあとは、休みをはさまずクールダウン（または終了）へ
+            if (r < repeats && restSec > 0) out += Phase(PhaseKind.REST, false, restSec.toDouble(), r)
+        }
+        if (cooldownSec > 0) out += Phase(PhaseKind.COOLDOWN, false, cooldownSec.toDouble(), 0)
+        return out
+    }
+}
+
+/** インターバルで走り終えた1区間の記録 */
+data class Lap(val kind: PhaseKind, val rep: Int, val distanceM: Double, val movingMs: Long) {
+    val paceSecPerKm: Double? get() = if (distanceM > 5) movingMs / 1000.0 / (distanceM / 1000.0) else null
+}
 enum class AnnounceUnit { DISTANCE, TIME }
 
 data class RunConfig(
@@ -14,6 +46,7 @@ data class RunConfig(
     /** お知らせの間隔。距離ならメートル、時間なら秒 */
     val announceEvery: Double = 1000.0,
     val gainThresholdM: Double = 2.5,
+    val interval: IntervalPlan? = null,
 )
 
 /** 1km ごとの区切り（最後の端数も含む） */
@@ -47,7 +80,16 @@ sealed interface TrackerEvent {
         val totalMovingMs: Long,
         val paceSecPerKm: Double?,
         val prevPaceSecPerKm: Double?,
+        /** この区間の登りと下り（メートル） */
+        val gainM: Double = 0.0,
+        val lossM: Double = 0.0,
     ) : TrackerEvent
+
+    /** インターバル：切り替えの3秒前から「3、2、1」 */
+    data class PhaseCountdown(val seconds: Int) : TrackerEvent
+
+    /** インターバル：区間が切り替わった。next が null ならメニュー終了 */
+    data class PhaseChange(val next: Phase?, val finished: Lap, val totalReps: Int) : TrackerEvent
 
     /** 目標の手前。remaining は距離ならメートル、時間なら秒 */
     data class Countdown(val kind: GoalKind, val remaining: Int) : TrackerEvent
@@ -100,6 +142,24 @@ class RunTracker(val config: RunConfig) {
     private var intervalStartMs = 0L
     private var prevIntervalPace: Double? = null
     private val firedCountdowns = HashSet<Int>()
+    private var intervalStartGain = 0.0
+    private var intervalStartLoss = 0.0
+
+    // インターバル用
+    private val phases: List<Phase> = config.interval?.phases().orEmpty()
+    private var phaseIndex = 0
+    private var phaseStartDist = 0.0
+    private var phaseStartMs = 0L
+    private val firedPhaseCountdowns = HashSet<Int>()
+    private val _laps = ArrayList<Lap>()
+    val laps: List<Lap> get() = _laps
+    val currentPhase: Phase? get() = phases.getOrNull(phaseIndex)
+
+    /** いまの区間の残り。時間なら秒、距離ならメートル */
+    fun phaseRemaining(): Double? {
+        val p = currentPhase ?: return null
+        return if (p.byDistance) p.amount - (distanceM - phaseStartDist) else p.amount - (movingMs - phaseStartMs) / 1000.0
+    }
 
     fun setManualPaused(paused: Boolean) {
         manualPaused = paused
@@ -216,10 +276,15 @@ class RunTracker(val config: RunConfig) {
                         intervalIndex++
                         val segMs = movingMs - intervalStartMs
                         val pace = segMs / 1000.0 / (config.announceEvery / 1000.0)
-                        events += TrackerEvent.Interval(intervalIndex, next, movingMs, pace, prevIntervalPace)
+                        events += TrackerEvent.Interval(
+                            intervalIndex, next, movingMs, pace, prevIntervalPace,
+                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss,
+                        )
                         prevIntervalPace = pace
                         intervalStartMs = movingMs
                         intervalStartDist = next
+                        intervalStartGain = elevation.gain
+                        intervalStartLoss = elevation.loss
                     }
                 }
                 AnnounceUnit.TIME -> {
@@ -228,10 +293,39 @@ class RunTracker(val config: RunConfig) {
                         intervalIndex++
                         val segDist = distanceM - intervalStartDist
                         val pace = if (segDist > 10) config.announceEvery / (segDist / 1000.0) else null
-                        events += TrackerEvent.Interval(intervalIndex, distanceM, movingMs, pace, prevIntervalPace)
+                        events += TrackerEvent.Interval(
+                            intervalIndex, distanceM, movingMs, pace, prevIntervalPace,
+                            elevation.gain - intervalStartGain, elevation.loss - intervalStartLoss,
+                        )
                         prevIntervalPace = pace
                         intervalStartMs = movingMs
                         intervalStartDist = distanceM
+                        intervalStartGain = elevation.gain
+                        intervalStartLoss = elevation.loss
+                    }
+                }
+            }
+        }
+
+        // インターバルの区間の切り替え
+        val phase = currentPhase
+        if (phase != null) {
+            val remaining = phaseRemaining() ?: 0.0
+            if (remaining <= 0) {
+                val lap = closeLap(phase)
+                phaseIndex++
+                phaseStartDist = distanceM
+                phaseStartMs = movingMs
+                firedPhaseCountdowns.clear()
+                events += TrackerEvent.PhaseChange(currentPhase, lap, config.interval?.repeats ?: 0)
+            } else {
+                // 距離で区切る区間は、いまの速さから「あと何秒か」を見積もる
+                val remainingSec = if (phase.byDistance) currentPace()?.let { remaining / (1000.0 / it) } else remaining
+                if (remainingSec != null) {
+                    val n = Math.ceil(remainingSec).toInt()
+                    if (n in 1..3 && phase.amount > 5 && firedPhaseCountdowns.add(n)) {
+                        (n + 1..3).forEach { firedPhaseCountdowns.add(it) }
+                        events += TrackerEvent.PhaseCountdown(n)
                     }
                 }
             }
@@ -264,7 +358,7 @@ class RunTracker(val config: RunConfig) {
                         events += TrackerEvent.Countdown(GoalKind.TIME, remaining)
                     }
                 }
-                GoalKind.FREE -> {}
+                GoalKind.FREE, GoalKind.INTERVAL -> {}
             }
         }
         return events
@@ -315,8 +409,16 @@ class RunTracker(val config: RunConfig) {
         splitStartSteps = steps
     }
 
+    private fun closeLap(phase: Phase): Lap {
+        val lap = Lap(phase.kind, phase.rep, distanceM - phaseStartDist, movingMs - phaseStartMs)
+        _laps += lap
+        return lap
+    }
+
     /** 終了時に呼ぶ。最後の端数（50m 以上）を区切りに足す */
     fun finish() {
+        currentPhase?.let { if (movingMs - phaseStartMs > 3000) closeLap(it) }
+        phaseIndex = phases.size
         val rest = distanceM - splitStartDist
         if (rest >= 50.0) closeSplit(rest)
     }

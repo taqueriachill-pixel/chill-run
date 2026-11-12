@@ -155,7 +155,7 @@ fun ScreenHeader(title: String, onBack: (() -> Unit)?) {
 fun Stepper(label: String, onMinus: () -> Unit, onPlus: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         SmallButton("−", Modifier.width(64.dp), onClick = onMinus)
-        Text(label, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.text, modifier = Modifier.width(120.dp), textAlign = TextAlign.Center)
+        Text(label, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Palette.text, modifier = Modifier.width(150.dp), textAlign = TextAlign.Center)
         SmallButton("＋", Modifier.width(64.dp), onClick = onPlus)
     }
 }

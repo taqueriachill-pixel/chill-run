@@ -1,18 +1,18 @@
 package com.chill.run.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,19 +25,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
+import com.chill.run.core.PhaseKind
 import com.chill.run.data.AppDb
+import com.chill.run.data.CourseEntity
+import com.chill.run.data.LapEntity
 import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
 import com.chill.run.data.SplitEntity
@@ -46,39 +45,63 @@ import com.chill.run.health.Health
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.cos
+
+private class DetailData(
+    val run: RunEntity?,
+    val points: List<PointEntity>,
+    val splits: List<SplitEntity>,
+    val laps: List<LapEntity>,
+    val course: CourseEntity?,
+    val courseRuns: List<RunEntity>,
+)
 
 @Composable
 fun DetailScreen(runId: Long, onBack: () -> Unit) {
     val context = LocalContext.current
     val dao = remember { AppDb.get(context).runDao() }
     val scope = rememberCoroutineScope()
-    var run by remember { mutableStateOf<RunEntity?>(null) }
-    var points by remember { mutableStateOf<List<PointEntity>>(emptyList()) }
-    var splits by remember { mutableStateOf<List<SplitEntity>>(emptyList()) }
-    var loaded by remember { mutableStateOf(false) }
+    var data by remember { mutableStateOf<DetailData?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(runId, reload) {
-        withContext(Dispatchers.IO) {
+        data = withContext(Dispatchers.IO) {
             val r = dao.getRun(runId)
-            val p = dao.points(runId)
-            val s = dao.splits(runId)
-            withContext(Dispatchers.Main) {
-                run = r; points = p; splits = s; loaded = true
+            val course = r?.courseId?.takeIf { it > 0 }?.let { dao.course(it) }
+            DetailData(
+                run = r,
+                points = dao.points(runId),
+                splits = dao.splits(runId),
+                laps = dao.laps(runId),
+                course = course,
+                courseRuns = if (course != null) dao.runsOfCourse(course.id) else emptyList(),
+            )
+        }
+    }
+
+    /** 種類を変える。コースに入っていれば、そのコースの種類として覚える */
+    fun setType(r: RunEntity, course: CourseEntity?, type: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                dao.updateRun(r.copy(type = type, typeSuggestion = ""))
+                if (course != null) dao.updateCourse(course.copy(type = type))
             }
+            reload++
         }
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScreenHeader("ランの記録", onBack)
-        val r = run
-        if (r == null) {
-            Text(if (loaded) "この記録は見つかりませんでした。" else "読み込み中…", color = Palette.dim)
+        val d = data
+        val r = d?.run
+        if (d == null || r == null) {
+            Text(if (d != null) "この記録は見つかりませんでした。" else "読み込み中…", color = Palette.dim)
             return@Column
         }
+        val points = d.points
+        val splits = d.splits
         val color = Palette.of(r.type)
 
         // ロードかトレイルかを大きく
@@ -87,7 +110,28 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 if (r.type == "TRAIL") "トレイル・獲得標高 +${Math.round(r.gainM)}m" else "ロード",
                 color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black,
             )
-            Text(formatDate(r.startTime), color = Color.White, fontSize = 15.sp)
+            Text(
+                formatDate(r.startTime) + (d.course?.let { "　${it.name}" } ?: "") + if (r.goalKind == "INTERVAL") "　インターバル" else "",
+                color = Color.White, fontSize = 15.sp,
+            )
+        }
+
+        // 自動の判定が、選んだ種類と違ったとき
+        if (r.typeSuggestion == "TRAIL" || r.typeSuggestion == "ROAD") {
+            val toTrail = r.typeSuggestion == "TRAIL"
+            Card {
+                Text(
+                    if (toTrail) "登りや坂が多いランでした。トレイルに変えますか？" else "登りや坂が少ないランでした。ロードに変えますか？",
+                    color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BigButton(
+                        if (toTrail) "トレイルに変える" else "ロードに変える", Modifier.weight(1f),
+                        color = if (toTrail) Palette.trail else Palette.road,
+                    ) { setType(r, d.course, r.typeSuggestion) }
+                    SmallButton("このまま", Modifier.weight(1f)) { setType(r, d.course, r.type) }
+                }
+            }
         }
 
         Card {
@@ -110,13 +154,49 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
 
         if (points.size >= 2) {
             Card {
-                SectionTitle("ルートの形（地図は段階2で追加します）")
-                RouteShape(points, color)
+                SectionTitle("地図")
+                RouteMap(points)
             }
-            if (points.count { it.alt != null } >= 2) {
-                Card {
-                    SectionTitle("標高")
-                    ElevationShape(points, r.altOffset, color)
+            Card {
+                SectionTitle("グラフ（横軸は距離）")
+                val withAlt = points.filter { it.alt != null }
+                if (withAlt.size >= 2) {
+                    val xs = DoubleArray(withAlt.size) { withAlt[it].distM }
+                    val ys = DoubleArray(withAlt.size) { withAlt[it].alt!! + r.altOffset }
+                    DistanceChart(
+                        xs, ys, color,
+                        topLabel = "標高　いちばん高い ${Math.round(ys.max())}m",
+                        bottomLabel = "いちばん低い ${Math.round(ys.min())}m",
+                        minRange = 30.0, filled = true,
+                    )
+                }
+                val pace = remember(points) { paceSeries(points) }
+                if (pace != null) {
+                    DistanceChart(
+                        pace.first, pace.second, Palette.warn,
+                        topLabel = "ペース　速い ${Fmt.pace(pace.second.min())}",
+                        bottomLabel = "遅い ${Fmt.pace(pace.second.max())}",
+                        minRange = 60.0, inverted = true,
+                    )
+                }
+            }
+        }
+
+        // インターバルの区間ごとの記録
+        if (d.laps.isNotEmpty()) {
+            Card {
+                SectionTitle("インターバルの区間")
+                Row { Cell("区間", 1.6f, head = true); Cell("距離", 1f, head = true); Cell("時間", 1f, head = true); Cell("ペース", 1.2f, head = true) }
+                d.laps.forEach { lap ->
+                    val kind = runCatching { PhaseKind.valueOf(lap.kind) }.getOrDefault(PhaseKind.RUN)
+                    val isRun = kind == PhaseKind.RUN
+                    val pace = if (lap.distanceM > 5) lap.movingMs / 1000.0 / (lap.distanceM / 1000.0) else null
+                    Row {
+                        Cell(AnnounceText.phaseName(kind) + if (lap.rep > 0) " ${lap.rep}" else "", 1.6f, strong = isRun)
+                        Cell("${Math.round(lap.distanceM)}m", 1f, strong = isRun)
+                        Cell(Fmt.clock(lap.movingMs), 1f, strong = isRun)
+                        Cell(Fmt.pace(pace), 1.2f, strong = isRun)
+                    }
                 }
             }
         }
@@ -142,6 +222,43 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             }
         }
 
+        // いつものコース
+        Card {
+            SectionTitle("いつものコース")
+            val course = d.course
+            if (course == null) {
+                Text("同じルートをもう一度走ると、自動で「いつものコース」としてまとまります。", color = Palette.dim, fontSize = 14.sp)
+            } else {
+                val runs = d.courseRuns
+                val nth = runs.indexOfFirst { it.id == r.id } + 1
+                val best = runs.filter { it.distanceM > 300 }.minByOrNull { avgPace(it) ?: Double.MAX_VALUE }
+                Text("${course.name}　${nth}回目（全部で ${runs.size} 回）", color = Palette.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                if (best != null) {
+                    Text(
+                        "このコースのベスト：${Fmt.pace(avgPace(best))}/km（${formatDate(best.startTime)}）" +
+                            if (best.id == r.id && runs.size > 1) "　今回がベスト！" else "",
+                        color = if (best.id == r.id && runs.size > 1) Palette.warn else Palette.text, fontSize = 14.sp,
+                    )
+                }
+                if (course.type.isNotEmpty()) {
+                    Text("このコースは、次からも自動で「${typeLabel(course.type)}」になります。", color = Palette.dim, fontSize = 13.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SmallButton("名前を付ける", Modifier.weight(1f)) { renaming = true }
+                    SmallButton("コースから外す", Modifier.weight(1f)) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                // shape を空にしないので、次に似たルートを走れば、また自動でまとまる
+                                dao.setCourse(r.id, 0)
+                                if (dao.runsOfCourse(course.id).isEmpty()) dao.deleteCourse(course.id)
+                            }
+                            reload++
+                        }
+                    }
+                }
+            }
+        }
+
         Card {
             SectionTitle("ヘルスコネクト")
             Text(if (r.hcSynced) "書き込み済みです。" else "まだ書き込んでいません。", color = Palette.text, fontSize = 15.sp)
@@ -161,14 +278,32 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SmallButton(if (r.type == "TRAIL") "ロードに変える" else "トレイルに変える", Modifier.weight(1f)) {
-                scope.launch {
-                    withContext(Dispatchers.IO) { dao.updateRun(r.copy(type = if (r.type == "TRAIL") "ROAD" else "TRAIL")) }
-                    reload++
-                }
+                setType(r, d.course, if (r.type == "TRAIL") "ROAD" else "TRAIL")
             }
             SmallButton("この記録を消す", Modifier.weight(1f)) { confirmDelete = true }
         }
         Gap(24)
+    }
+
+    val course = data?.course
+    if (renaming && course != null) {
+        var name by remember(course.id) { mutableStateOf(course.name) }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("コースの名前") },
+            text = { OutlinedTextField(value = name, onValueChange = { name = it.take(30) }, singleLine = true, label = { Text("例：生田緑地") }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    renaming = false
+                    val newName = name.trim()
+                    if (newName.isNotEmpty()) scope.launch {
+                        withContext(Dispatchers.IO) { dao.updateCourse(course.copy(name = newName)) }
+                        reload++
+                    }
+                }) { Text("決定") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text("やめる") } },
+        )
     }
 
     if (confirmDelete) {
@@ -190,64 +325,31 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
     }
 }
 
+/** 距離ごとのペース（秒/km）。前後をならして、止まっていた所は外す */
+private fun paceSeries(points: List<PointEntity>): Pair<DoubleArray, DoubleArray>? {
+    if (points.size < 12) return null
+    val xs = ArrayList<Double>()
+    val ys = ArrayList<Double>()
+    val w = 6
+    for (i in points.indices) {
+        val a = points[(i - w).coerceAtLeast(0)]
+        val b = points[(i + w).coerceAtMost(points.lastIndex)]
+        val dd = b.distM - a.distM
+        val dt = (b.movingMs - a.movingMs) / 1000.0
+        if (dd < 5 || dt <= 0) continue
+        xs += points[i].distM
+        ys += (dt / (dd / 1000.0)).coerceIn(150.0, 1200.0)
+    }
+    return if (xs.size >= 2) xs.toDoubleArray() to ys.toDoubleArray() else null
+}
+
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.Cell(text: String, weight: Float, head: Boolean = false) {
+private fun RowScope.Cell(text: String, weight: Float, head: Boolean = false, strong: Boolean = true) {
     Text(
         text,
         modifier = Modifier.weight(weight).padding(vertical = 4.dp),
-        color = if (head) Palette.dim else Palette.text,
+        color = if (head || !strong) Palette.dim else Palette.text,
         fontSize = if (head) 13.sp else 16.sp,
         textAlign = TextAlign.Center,
     )
-}
-
-/** ルートの形だけを線で描く（北が上） */
-@Composable
-private fun RouteShape(points: List<PointEntity>, color: Color) {
-    Canvas(Modifier.fillMaxWidth().height(220.dp)) {
-        val minLat = points.minOf { it.lat }
-        val maxLat = points.maxOf { it.lat }
-        val minLon = points.minOf { it.lon }
-        val maxLon = points.maxOf { it.lon }
-        val k = cos(Math.toRadians((minLat + maxLat) / 2))
-        val w = ((maxLon - minLon) * k).coerceAtLeast(1e-6)
-        val h = (maxLat - minLat).coerceAtLeast(1e-6)
-        val pad = 12f
-        val scale = minOf((size.width - pad * 2) / w, (size.height - pad * 2) / h)
-        val ox = (size.width - w * scale) / 2
-        val oy = (size.height - h * scale) / 2
-        val path = Path()
-        points.forEachIndexed { i, p ->
-            val x = (ox + (p.lon - minLon) * k * scale).toFloat()
-            val y = (oy + (maxLat - p.lat) * scale).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, color, style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-        val first = points.first()
-        val last = points.last()
-        drawCircle(Color.White, 9f, Offset((ox + (first.lon - minLon) * k * scale).toFloat(), (oy + (maxLat - first.lat) * scale).toFloat()))
-        drawCircle(Palette.warn, 9f, Offset((ox + (last.lon - minLon) * k * scale).toFloat(), (oy + (maxLat - last.lat) * scale).toFloat()))
-    }
-    Text("白：スタート　オレンジ：ゴール", color = Palette.dim, fontSize = 12.sp)
-}
-
-/** 横軸を距離にした標高の線 */
-@Composable
-private fun ElevationShape(points: List<PointEntity>, offset: Double, color: Color) {
-    val withAlt = points.filter { it.alt != null }
-    val minAlt = withAlt.minOf { it.alt!! } + offset
-    val maxAlt = withAlt.maxOf { it.alt!! } + offset
-    Canvas(Modifier.fillMaxWidth().height(120.dp)) {
-        val total = withAlt.last().distM.coerceAtLeast(1.0)
-        // 平らなコースが大げさな山に見えないよう、縦の幅は最低 20m ぶん取る
-        val range = (maxAlt - minAlt).coerceAtLeast(20.0)
-        val path = Path()
-        withAlt.forEachIndexed { i, p ->
-            val x = (p.distM / total * size.width).toFloat()
-            val y = (size.height - ((p.alt!! + offset - minAlt) / range * (size.height - 8f)) - 4f).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, color, style = Stroke(width = 4f, cap = StrokeCap.Round, join = StrokeJoin.Round))
-    }
-    Text("いちばん低い ${Math.round(minAlt)}m 〜 いちばん高い ${Math.round(maxAlt)}m", color = Palette.dim, fontSize = 12.sp)
 }

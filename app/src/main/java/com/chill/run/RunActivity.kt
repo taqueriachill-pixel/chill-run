@@ -38,8 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
 import com.chill.run.core.GoalKind
+import com.chill.run.core.PhaseKind
 import com.chill.run.core.RunType
 import com.chill.run.run.LiveState
 import com.chill.run.run.RunHub
@@ -106,6 +108,27 @@ private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () 
                 state.autoPaused -> "止まっているので時間を止めています"
                 else -> goalLine(state)
             }
+            // インターバル中は、いまの区間と残りを大きく出す
+            val phase = state.phase
+            if (phase != null) {
+                val running = phase.kind == PhaseKind.RUN
+                val remaining = state.phaseRemaining ?: 0.0
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(16.dp))
+                        .background(if (running) accent else Color(0xFF26343C)).padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        AnnounceText.phaseName(phase.kind) + if (phase.rep > 0) " ${phase.rep}/${state.totalReps}" else "",
+                        color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black,
+                    )
+                    Text(
+                        if (phase.byDistance) "あと ${Math.round(remaining.coerceAtLeast(0.0))}m"
+                        else "あと ${Fmt.clock((remaining.coerceAtLeast(0.0) * 1000).toLong() + 999)}",
+                        color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
             Text(
                 status,
                 color = if (state.manualPaused || state.autoPaused) Palette.warn else Palette.dim,
@@ -146,6 +169,7 @@ private fun RunScreen(state: LiveState, onPauseToggle: () -> Unit, onFinish: () 
 
 private fun goalLine(s: LiveState): String = when (s.goalKind) {
     GoalKind.FREE -> "自由に走る"
+    GoalKind.INTERVAL -> if (s.intervalDone) "インターバル終了（このまま走り続けられます）" else "インターバル"
     GoalKind.DISTANCE ->
         if (s.goalReached) "目標 ${Fmt.km(s.goalValue)}km 達成！"
         else "目標 ${Fmt.km(s.goalValue)}km ・ あと ${Fmt.km((s.goalValue - s.distanceM).coerceAtLeast(0.0))}km"

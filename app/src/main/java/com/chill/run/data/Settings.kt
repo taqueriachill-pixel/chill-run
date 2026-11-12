@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.chill.run.core.AnnounceOptions
 import com.chill.run.core.AnnounceUnit
 import com.chill.run.core.GoalKind
+import com.chill.run.core.IntervalPlan
 import com.chill.run.core.RunConfig
 import com.chill.run.core.RunType
 
@@ -70,10 +71,24 @@ class Settings(context: Context) {
         get() = p.getInt("lastGoalMinutes", 30)
         set(v) = p.edit().putInt("lastGoalMinutes", v).apply()
 
+    /** トレイルの判定の目安：1km あたりの登り（m） */
+    var trailGainPerKm: Int
+        get() = p.getInt("trailGainPerKm", 15)
+        set(v) = p.edit().putInt("trailGainPerKm", v).apply()
+
+    /** トレイルの判定の目安：勾配10%以上の坂を通った割合（%） */
+    var trailSteepPercent: Int
+        get() = p.getInt("trailSteepPercent", 10)
+        set(v) = p.edit().putInt("trailSteepPercent", v).apply()
+
+    var lastMenuId: Long
+        get() = p.getLong("lastMenuId", 0)
+        set(v) = p.edit().putLong("lastMenuId", v).apply()
+
     val announceOptions: AnnounceOptions
         get() = AnnounceOptions(pace = sayPace, compare = sayCompare, cheer = sayCheer)
 
-    fun runConfig(type: RunType, goalKind: GoalKind, goalValue: Double, hasBarometer: Boolean): RunConfig {
+    fun runConfig(type: RunType, goalKind: GoalKind, goalValue: Double, hasBarometer: Boolean, interval: IntervalPlan? = null): RunConfig {
         val iv = announceInterval
         val unit = if (iv.startsWith("T")) AnnounceUnit.TIME else AnnounceUnit.DISTANCE
         val every = iv.drop(1).toDoubleOrNull() ?: 1000.0
@@ -81,9 +96,11 @@ class Settings(context: Context) {
             type = type,
             goalKind = goalKind,
             goalValue = goalValue,
-            autoPause = autoPause,
+            // インターバルでは、休みの間も時計を進め、区切りのお知らせは区間の切り替えに任せる
+            autoPause = autoPause && interval == null,
             announceUnit = unit,
-            announceEvery = if (announceOn) every else 0.0,
+            announceEvery = if (announceOn && interval == null) every else 0.0,
+            interval = interval,
             // GPS の高さはゆれが大きいので、気圧がないときは目を粗くする
             gainThresholdM = if (hasBarometer) 2.5 else 6.0,
         )

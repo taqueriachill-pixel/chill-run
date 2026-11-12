@@ -85,6 +85,17 @@ object AnnounceText {
             }
             sb.append("。")
         }
+        // トレイルでは、この区間の登りと下りも伝える
+        if (config.type == RunType.TRAIL) {
+            val up = Math.round(ev.gainM).toInt()
+            val down = Math.round(ev.lossM).toInt()
+            if (up >= 3 || down >= 3) {
+                val parts = ArrayList<String>()
+                if (up >= 3) parts += "登り${up}メートル"
+                if (down >= 3) parts += "下り${down}メートル"
+                sb.append(parts.joinToString("、")).append("。")
+            }
+        }
         if (opts.cheer) phrases.pick(scene(ev, config))?.let { sb.append(it) }
         return sb.toString()
     }
@@ -103,6 +114,11 @@ object AnnounceText {
             if (step > 0 && done >= config.goalValue / 2 && done - step < config.goalValue / 2) return Scenes.SECOND_HALF
         }
         if (ev.index == 1) return Scenes.FIRST
+        // トレイルの坂では、ペースの上がり下がりより坂の言葉を優先する
+        if (config.type == RunType.TRAIL) {
+            if (ev.gainM - ev.lossM >= 15) return Scenes.CLIMB
+            if (ev.lossM - ev.gainM >= 15) return Scenes.DESCENT
+        }
         val pace = ev.paceSecPerKm
         val prev = ev.prevPaceSecPerKm
         if (pace == null || prev == null) return Scenes.STEADY
@@ -124,7 +140,33 @@ object AnnounceText {
             ev.remaining == 10 -> "あと10秒"
             else -> ev.remaining.toString()
         }
-        GoalKind.FREE -> ""
+        GoalKind.FREE, GoalKind.INTERVAL -> ""
+    }
+
+    fun phaseName(kind: PhaseKind): String = when (kind) {
+        PhaseKind.WARMUP -> "ウォームアップ"
+        PhaseKind.RUN -> "走る"
+        PhaseKind.REST -> "ゆっくり"
+        PhaseKind.COOLDOWN -> "クールダウン"
+    }
+
+    /** インターバルの最初のひとこと */
+    fun phaseStart(phase: Phase, totalReps: Int): String = when (phase.kind) {
+        PhaseKind.RUN -> if (phase.rep == totalReps && totalReps > 1) "走る、ラスト1本" else "走る、${phase.rep}本目"
+        else -> phaseName(phase.kind)
+    }
+
+    /** インターバルの切り替えのお知らせ */
+    fun phaseChange(ev: TrackerEvent.PhaseChange): String {
+        val sb = StringBuilder()
+        val next = ev.next
+        sb.append(if (next == null) "メニュー終了、おつかれさま" else phaseStart(next, ev.totalReps)).append("。")
+        val lap = ev.finished
+        val pace = lap.paceSecPerKm
+        if (lap.kind == PhaseKind.RUN && pace != null) {
+            sb.append("${lap.rep}本目はペース${Fmt.paceSpoken(pace)}。")
+        }
+        return sb.toString()
     }
 
     private fun roundForSpeech(m: Double): Double =

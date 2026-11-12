@@ -19,7 +19,7 @@ android {
         minSdk = 34
         targetSdk = 36
         versionCode = buildNumber
-        versionName = "0.1.$buildNumber"
+        versionName = "0.2.$buildNumber"
     }
 
     signingConfigs {
@@ -60,6 +60,11 @@ kotlin {
     jvmToolchain(17)
 }
 
+ksp {
+    // データベースの設計図を書き出す（引っ越しのテストで使う）
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.09.00"))
     implementation("androidx.compose.ui:ui")
@@ -75,4 +80,5 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

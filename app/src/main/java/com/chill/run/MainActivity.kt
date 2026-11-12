@@ -21,6 +21,8 @@ import com.chill.run.ui.ChillTheme
 import com.chill.run.ui.DetailScreen
 import com.chill.run.ui.HistoryScreen
 import com.chill.run.ui.HomeScreen
+import com.chill.run.ui.IntervalScreen
+import com.chill.run.ui.MapSaveScreen
 import com.chill.run.ui.Palette
 import com.chill.run.ui.PermissionsScreen
 import com.chill.run.ui.SettingsScreen
@@ -45,7 +47,12 @@ class MainActivity : ComponentActivity() {
                             runId = r.removePrefix("detail/").toLongOrNull() ?: 0,
                             onBack = { route = "history" },
                         )
-                        r == "settings" -> SettingsScreen(onBack = { route = "home" })
+                        r == "settings" -> SettingsScreen(onBack = { route = "home" }, onNavigate = { route = it })
+                        r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
+                        r.startsWith("interval/") -> IntervalScreen(
+                            menuId = r.removePrefix("interval/").toLongOrNull() ?: 0,
+                            onBack = { route = "home" },
+                        )
                         r == "permissions" -> PermissionsScreen(onBack = { route = "home" })
                         r == "check" -> CheckScreen(onBack = { route = "home" })
                         else -> HomeScreen(onNavigate = { route = it })
@@ -55,7 +62,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun parentOf(r: String) = if (r.startsWith("detail/")) "history" else "home"
+    private fun parentOf(r: String) = when {
+        r.startsWith("detail/") -> "history"
+        r == "mapsave" -> "settings"
+        else -> "home"
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

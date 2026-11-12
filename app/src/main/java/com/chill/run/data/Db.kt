@@ -1,6 +1,7 @@
 package com.chill.run.data
 
 import android.content.Context
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -11,6 +12,8 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /** 1回のラン */
@@ -38,6 +41,51 @@ data class RunEntity(
     val altOffset: Double = 0.0,
     val hcSynced: Boolean = false,
     val note: String = "",
+    // ---- ここから段階2で追加 ----
+    /** 一覧に出す小さな標高グラフ用の値（カンマ区切り） */
+    @ColumnInfo(defaultValue = "") val elevProfile: String = "",
+    /** ルートの形（50m ごとの点）。同じコースかどうかを比べるのに使う */
+    @ColumnInfo(defaultValue = "") val shape: String = "",
+    /** いつものコースの番号。0 はコースなし */
+    @ColumnInfo(defaultValue = "0") val courseId: Long = 0,
+    /** 自動の判定が選んだ種類と違うときの提案（"TRAIL" か "ROAD"）。なければ空 */
+    @ColumnInfo(defaultValue = "") val typeSuggestion: String = "",
+)
+
+/** いつものコース */
+@Entity(tableName = "courses")
+data class CourseEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** このコースの種類が決まっていれば "ROAD" か "TRAIL"。決まっていなければ空 */
+    val type: String = "",
+    val shape: String,
+)
+
+/** インターバルで走った1区間 */
+@Entity(tableName = "laps", indices = [Index("runId")])
+data class LapEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val runId: Long,
+    val idx: Int,
+    /** WARMUP / RUN / REST / COOLDOWN */
+    val kind: String,
+    val rep: Int,
+    val distanceM: Double,
+    val movingMs: Long,
+)
+
+/** 保存したインターバルのメニュー */
+@Entity(tableName = "interval_menus")
+data class IntervalMenuEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val warmupSec: Int,
+    val runByDistance: Boolean,
+    val runAmount: Double,
+    val restSec: Int,
+    val repeats: Int,
+    val cooldownSec: Int,
 )
 
 /** ルートの1地点 */
@@ -105,15 +153,75 @@ interface RunDao {
 
     @Query("DELETE FROM splits WHERE runId = :runId")
     suspend fun deleteSplits(runId: Long)
+
+    // ---- ここから段階2で追加 ----
+    @Query("SELECT * FROM runs WHERE endTime > 0 ORDER BY startTime DESC")
+    suspend fun finishedRuns(): List<RunEntity>
+
+    @Query("SELECT * FROM runs WHERE endTime > 0 AND courseId = :courseId ORDER BY startTime")
+    suspend fun runsOfCourse(courseId: Long): List<RunEntity>
+
+    @Query("UPDATE runs SET courseId = :courseId WHERE id = :runId")
+    suspend fun setCourse(runId: Long, courseId: Long)
+
+    @Insert
+    suspend fun insertCourse(course: CourseEntity): Long
+
+    @Update
+    suspend fun updateCourse(course: CourseEntity)
+
+    @Query("SELECT * FROM courses")
+    suspend fun courses(): List<CourseEntity>
+
+    @Query("SELECT * FROM courses")
+    fun observeCourses(): Flow<List<CourseEntity>>
+
+    @Query("SELECT * FROM courses WHERE id = :id")
+    suspend fun course(id: Long): CourseEntity?
+
+    @Query("DELETE FROM courses WHERE id = :id")
+    suspend fun deleteCourse(id: Long)
+
+    @Insert
+    suspend fun insertLaps(laps: List<LapEntity>)
+
+    @Query("SELECT * FROM laps WHERE runId = :runId ORDER BY idx")
+    suspend fun laps(runId: Long): List<LapEntity>
+
+    @Query("DELETE FROM laps WHERE runId = :runId")
+    suspend fun deleteLaps(runId: Long)
+
+    @Insert
+    suspend fun insertMenu(menu: IntervalMenuEntity): Long
+
+    @Update
+    suspend fun updateMenu(menu: IntervalMenuEntity)
+
+    @Query("SELECT * FROM interval_menus ORDER BY id")
+    fun observeMenus(): Flow<List<IntervalMenuEntity>>
+
+    @Query("SELECT * FROM interval_menus WHERE id = :id")
+    suspend fun menu(id: Long): IntervalMenuEntity?
+
+    @Query("DELETE FROM interval_menus WHERE id = :id")
+    suspend fun deleteMenu(id: Long)
 }
 
 suspend fun RunDao.deleteRun(runId: Long) {
+    val courseId = getRun(runId)?.courseId ?: 0
     deletePoints(runId)
     deleteSplits(runId)
+    deleteLaps(runId)
     deleteRunRow(runId)
+    // そのコースのランが1つもなくなったら、コースも片づける
+    if (courseId > 0 && runsOfCourse(courseId).isEmpty()) deleteCourse(courseId)
 }
 
-@Database(entities = [RunEntity::class, PointEntity::class, SplitEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class, IntervalMenuEntity::class],
+    version = 2,
+    exportSchema = true,
+)
 abstract class AppDb : RoomDatabase() {
     abstract fun runDao(): RunDao
 
@@ -123,7 +231,15 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
+                .addMigrations(MIGRATION_1_2)
                 .build().also { instance = it }
         }
+    }
+}
+
+/** 段階1 → 段階2 の「引っ越し」。これまでの記録を残したまま、新しい項目と表を足す */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V1_TO_2.forEach { db.execSQL(it) }
     }
 }

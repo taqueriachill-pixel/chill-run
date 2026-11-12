@@ -39,7 +39,7 @@ import com.chill.run.run.Speaker
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
     val scope = rememberCoroutineScope()
@@ -57,6 +57,8 @@ fun SettingsScreen(onBack: () -> Unit) {
     var phraseMessage by remember { mutableStateOf<String?>(null) }
     var weightMessage by remember { mutableStateOf<String?>(null) }
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
+    var trailGain by remember { mutableIntStateOf(settings.trailGainPerKm) }
+    var trailSteep by remember { mutableIntStateOf(settings.trailSteepPercent) }
 
     val speaker = remember { Speaker(context, settings.ttsRate, settings.ttsVolume) }
     DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
@@ -135,6 +137,32 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
             phraseMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
+        }
+
+        Card {
+            SectionTitle("地図")
+            Text("走る前に、よく走るあたりの地図をスマホに取っておけます（山の中で通信がなくても見られます）。", color = Palette.dim, fontSize = 13.sp)
+            SmallButton("地図の一時保存", Modifier.fillMaxWidth()) { onNavigate("mapsave") }
+        }
+
+        Card {
+            SectionTitle("トレイルの判定の目安")
+            Text(
+                "走り終わったあと、次の2つの両方に当てはまると「トレイルに変えますか？」と聞きます。",
+                color = Palette.dim, fontSize = 13.sp,
+            )
+            Text("1km あたりの登り", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "$trailGain m 以上",
+                onMinus = { trailGain = (trailGain - 1).coerceAtLeast(3); settings.trailGainPerKm = trailGain },
+                onPlus = { trailGain = (trailGain + 1).coerceAtMost(80); settings.trailGainPerKm = trailGain },
+            )
+            Text("急な坂（勾配 10% 以上）を通った割合", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "$trailSteep % 以上",
+                onMinus = { trailSteep = (trailSteep - 1).coerceAtLeast(1); settings.trailSteepPercent = trailSteep },
+                onPlus = { trailSteep = (trailSteep + 1).coerceAtMost(60); settings.trailSteepPercent = trailSteep },
+            )
         }
 
         Card {

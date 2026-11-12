@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
@@ -21,6 +22,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,6 +36,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.chill.run.RunActivity
 import com.chill.run.core.GoalKind
 import com.chill.run.core.RunType
+import com.chill.run.data.AppDb
 import com.chill.run.data.Settings
 import com.chill.run.run.RunHub
 import com.chill.run.run.RunService
@@ -51,6 +54,10 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     var goalMin by remember { mutableIntStateOf(settings.lastGoalMinutes) }
     var hasLocation by remember { mutableStateOf(Perms.location(context)) }
     var gpsAccuracy by remember { mutableStateOf<Float?>(null) }
+    val dao = remember { AppDb.get(context).runDao() }
+    val menus by remember { dao.observeMenus() }.collectAsState(initial = emptyList())
+    var menuId by remember { mutableLongStateOf(settings.lastMenuId) }
+    val menu = menus.firstOrNull { it.id == menuId } ?: menus.firstOrNull()
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { hasLocation = Perms.location(context) }
 
@@ -60,11 +67,13 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
         settings.lastGoalKm = goalKm
         settings.lastGoalMinutes = goalMin
         val goalValue = when (goalKind) {
-            GoalKind.FREE -> 0.0
+            GoalKind.FREE, GoalKind.INTERVAL -> 0.0
             GoalKind.DISTANCE -> goalKm * 1000.0
             GoalKind.TIME -> goalMin * 60.0
         }
-        RunService.start(context, type, goalKind, goalValue)
+        val plan = if (goalKind == GoalKind.INTERVAL) menu?.toPlan() ?: return else null
+        if (menu != null) settings.lastMenuId = menu.id
+        RunService.start(context, type, goalKind, goalValue, plan)
         context.startActivity(Intent(context, RunActivity::class.java))
     }
 
@@ -109,6 +118,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     Chip("目標の距離", goalKind == GoalKind.DISTANCE, Modifier.weight(1f), color = accent) { goalKind = GoalKind.DISTANCE }
                     Chip("目標の時間", goalKind == GoalKind.TIME, Modifier.weight(1f), color = accent) { goalKind = GoalKind.TIME }
                 }
+                Chip("インターバル", goalKind == GoalKind.INTERVAL, Modifier.fillMaxWidth(), color = accent) { goalKind = GoalKind.INTERVAL }
                 when (goalKind) {
                     GoalKind.DISTANCE -> Stepper(
                         "%.1f km".format(goalKm),
@@ -121,8 +131,26 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                         onPlus = { goalMin = (goalMin + 5).coerceAtMost(600) },
                     )
                     GoalKind.FREE -> {}
+                    GoalKind.INTERVAL -> {
+                        if (menus.isEmpty()) {
+                            Text("まだメニューがありません。まず1つ作ってください。", color = Palette.dim, fontSize = 14.sp)
+                        } else {
+                            menus.chunked(2).forEach { rowItems ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    rowItems.forEach { m ->
+                                        Chip(m.name, m.id == menu?.id, Modifier.weight(1f), color = accent) { menuId = m.id }
+                                    }
+                                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            if (menu != null) Text(menu.summary(), color = Palette.text, fontSize = 15.sp)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (menu != null) SmallButton("このメニューを直す", Modifier.weight(1f)) { onNavigate("interval/${menu.id}") }
+                            SmallButton("新しく作る", Modifier.weight(1f)) { onNavigate("interval/0") }
+                        }
+                    }
                 }
-                Text("インターバルは段階2で追加します。", color = Palette.dim, fontSize = 13.sp)
             }
 
             if (!hasLocation) {
@@ -138,7 +166,10 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     },
                     color = if ((gpsAccuracy ?: 99f) <= 10f) Palette.trail else Palette.dim, fontSize = 14.sp,
                 )
-                BigButton("スタート", Modifier.fillMaxWidth(), color = accent) { startRun() }
+                BigButton(
+                    "スタート", Modifier.fillMaxWidth(), color = accent,
+                    enabled = goalKind != GoalKind.INTERVAL || menu != null,
+                ) { startRun() }
             }
         }
 

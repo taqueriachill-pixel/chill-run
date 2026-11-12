@@ -1,6 +1,7 @@
 package com.chill.run.run
 
 import com.chill.run.core.GoalKind
+import com.chill.run.core.Phase
 import com.chill.run.core.RunType
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -23,6 +24,13 @@ data class LiveState(
     val gpsAccuracyM: Float? = null,
     val elevationSource: String = "",
     val goalReached: Boolean = false,
+    /** インターバル中の、いまの区間（なければ null） */
+    val phase: Phase? = null,
+    /** いまの区間の残り。時間なら秒、距離ならメートル */
+    val phaseRemaining: Double? = null,
+    val totalReps: Int = 0,
+    /** インターバルのメニューを最後までやり終えた */
+    val intervalDone: Boolean = false,
     /** 終了して保存したランの番号。保存しなかったときは -1 */
     val finishedRunId: Long? = null,
 )

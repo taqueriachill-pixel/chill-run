@@ -12,6 +12,7 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import com.chill.run.core.HeartRate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -30,15 +31,6 @@ object BleCheck {
     private val NAME_HINT = Regex("amazfit|powerbuds|zepp|huami|btalk|zeblaze", RegexOption.IGNORE_CASE)
 
     private class Candidate(val device: BluetoothDevice, val name: String, val advertisesHr: Boolean, val how: String)
-
-    /** 心拍数の通知の中身から、拍/分を取り出す */
-    fun parseHeartRate(value: ByteArray): Int? {
-        if (value.size < 2) return null
-        val sixteenBit = value[0].toInt() and 0x01 != 0
-        return if (sixteenBit) {
-            if (value.size < 3) null else (value[1].toInt() and 0xFF) or ((value[2].toInt() and 0xFF) shl 8)
-        } else value[1].toInt() and 0xFF
-    }
 
     private fun short(uuid: UUID): String {
         val s = uuid.toString()
@@ -126,7 +118,7 @@ object BleCheck {
                 }
 
                 override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-                    if (characteristic.uuid == HR_MEASUREMENT) parseHeartRate(value)?.let { values.add(it) }
+                    if (characteristic.uuid == HR_MEASUREMENT) HeartRate.parse(value)?.let { values.add(it) }
                 }
             }
             var gatt: BluetoothGatt? = null
