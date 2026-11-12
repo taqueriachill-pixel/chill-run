@@ -188,7 +188,8 @@ class MusicEngine(
      */
     fun update(newTarget: Double?, switchNow: Boolean = false) {
         if (released || usable.isEmpty()) return
-        if (newTarget != null && newTarget > 0) target = newTarget
+        // 歩数の細かいゆれで曲がふらつかないよう、目標はならしながら追いかける（切り替えのときだけ、すぐ合わせる）
+        if (newTarget != null && newTarget > 0) target = if (switchNow) newTarget else target + 0.2 * (newTarget - target)
         val player = players[active]
         if (current == null) return
         if (switchNow && !fading) {
@@ -201,7 +202,8 @@ class MusicEngine(
         // 速さは 1秒に 1% ずつ、なめらかに変える
         val wanted = TempoMatch.speedFor(effectiveBpm, target, range)
         val step = (wanted - speed).coerceIn(-0.01, 0.01)
-        if (Math.abs(step) > 0.0005) {
+        // 0.8% より小さいずれは、そのままにする（細かく変え続けると、かえって聞きづらい）
+        if (Math.abs(wanted - speed) > 0.008) {
             speed += step
             player.playbackParameters = PlaybackParameters(speed.toFloat(), 1f)
         }

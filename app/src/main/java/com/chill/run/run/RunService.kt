@@ -489,6 +489,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         val dist = t.distanceM
         val sp = speaker
         // 始まりの合図（音と振動）。合図の音が録音に入らないよう、少し待ってから録り始める
+        music?.setDucked(true) // 録音に音楽が入りにくいよう、録音中は音楽を小さくする
         sp?.muted = true
         sp?.chime()
         vibrate(120)
@@ -497,6 +498,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         scope.launch {
             delay(450)
             val started = recorder.start(MediaFiles.file(context, relative), MEMO_MAX_MS) { duration, ok ->
+                music?.setDucked(false)
                 // 終わりの合図
                 sp?.muted = false
                 sp?.chime()
@@ -510,6 +512,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 updateNotification()
             }
             if (!started) {
+                music?.setDucked(false)
                 sp?.muted = false
                 sp?.say("録音を始められませんでした", flush = true)
             }
