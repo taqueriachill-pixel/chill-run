@@ -46,4 +46,9 @@ object MigrationSql {
         "ALTER TABLE `points` ADD COLUMN `hr` INTEGER",
         "ALTER TABLE `splits` ADD COLUMN `avgHr` INTEGER NOT NULL DEFAULT 0",
     )
+
+    val V4_TO_5 = listOf(
+        "CREATE TABLE IF NOT EXISTS `tracks` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `uri` TEXT NOT NULL, `title` TEXT NOT NULL, `artist` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `bpm` REAL NOT NULL, `bpmManual` INTEGER NOT NULL, `bpmState` INTEGER NOT NULL, `enabled` INTEGER NOT NULL)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS `index_tracks_uri` ON `tracks` (`uri`)",
+    )
 }

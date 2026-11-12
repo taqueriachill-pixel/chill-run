@@ -50,6 +50,32 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "0") val courseId: Long = 0,
     /** 自動の判定が選んだ種類と違うときの提案（"TRAIL" か "ROAD"）。なければ空 */
     @ColumnInfo(defaultValue = "") val typeSuggestion: String = "",
+    // ---- ここから段階5で追加 ----
+    @Insert
+    suspend fun insertTrack(track: TrackEntity): Long
+
+    @Update
+    suspend fun updateTrack(track: TrackEntity)
+
+    @Query("SELECT * FROM tracks ORDER BY title")
+    suspend fun tracks(): List<TrackEntity>
+
+    @Query("SELECT * FROM tracks ORDER BY title")
+    fun observeTracks(): Flow<List<TrackEntity>>
+
+    @Query("SELECT * FROM tracks WHERE id = :id")
+    suspend fun track(id: Long): TrackEntity?
+
+    @Query("DELETE FROM tracks WHERE id = :id")
+    suspend fun deleteTrack(id: Long)
+
+    @Query("DELETE FROM tracks")
+    suspend fun deleteAllTracks()
+
+    /** 学習用：これまでの 1km ごとの記録（ペースとケイデンスを出すのに使う） */
+    @Query("SELECT * FROM splits WHERE distanceM >= 999 AND steps > 0 ORDER BY id DESC LIMIT 300")
+    suspend fun recentFullSplits(): List<SplitEntity>
+
     // ---- ここから段階4で追加 ----
     @ColumnInfo(defaultValue = "0") val avgHr: Int = 0,
     @ColumnInfo(defaultValue = "0") val maxHr: Int = 0,
@@ -146,6 +172,25 @@ data class MediaEntity(
     /** 0=まだ文字にしていない 1=文字にできた 2=文字にできなかった */
     val textState: Int = 0,
     val durationMs: Long = 0,
+)
+
+/** 音楽の曲（段階5で追加） */
+@Entity(tableName = "tracks", indices = [Index(value = ["uri"], unique = true)])
+data class TrackEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** 曲のファイルの場所 */
+    val uri: String,
+    val title: String,
+    val artist: String = "",
+    val durationMs: Long = 0,
+    /** テンポ。まだ調べていない・調べられなかったときは 0 */
+    val bpm: Double = 0.0,
+    /** 手で直した BPM か（手で直したものは、自動では書き換えない） */
+    val bpmManual: Boolean = false,
+    /** 0=まだ調べていない 1=調べた 2=調べられなかった */
+    val bpmState: Int = 0,
+    /** ランで使うか */
+    val enabled: Boolean = true,
 )
 
 @Dao
@@ -279,9 +324,9 @@ suspend fun RunDao.deleteRun(runId: Long) {
 @Database(
     entities = [
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
-        IntervalMenuEntity::class, MediaEntity::class,
+        IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -293,7 +338,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build().also { instance = it }
         }
     }
@@ -317,5 +362,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V3_TO_4.forEach { db.execSQL(it) }
+    }
+}
+
+/** 段階4 → 段階5 の「引っ越し」。音楽の曲の表を足す */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V4_TO_5.forEach { db.execSQL(it) }
     }
 }

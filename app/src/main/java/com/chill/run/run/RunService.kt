@@ -31,9 +31,11 @@ import com.chill.run.CaptureActivity
 import com.chill.run.R
 import com.chill.run.RunActivity
 import com.chill.run.core.AnnounceText
+import com.chill.run.core.CadenceModel
 import com.chill.run.core.Fmt
 import com.chill.run.core.Geo
 import com.chill.run.core.GoalKind
+import com.chill.run.core.PhaseKind
 import com.chill.run.core.HrAlert
 import com.chill.run.core.IntervalPlan
 import com.chill.run.core.PhraseBook
@@ -55,6 +57,7 @@ import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
+import com.chill.run.music.MusicEngine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -116,6 +119,12 @@ class RunService : Service(), SensorEventListener, LocationListener {
     private var hrMissingWarned = false
     private var startElapsedMs = 0L
 
+    // 音楽
+    private var music: MusicEngine? = null
+    private var cadenceModel = CadenceModel()
+    private var lastPhaseKind: PhaseKind? = null
+    private var lastRunTempo = 0.0
+
     // 歩数
     private var lastStepCounter = -1f
     private var tickCount = 0
@@ -144,6 +153,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
             ACTION_RESUME -> setPaused(false)
             ACTION_FINISH -> finishRun()
             ACTION_MEMO -> toggleMemo()
+            ACTION_MUSIC_TOGGLE -> { music?.togglePause(); publish() }
+            ACTION_MUSIC_NEXT -> { music?.next(); publish() }
             else -> {}
         }
         // 記録していないのに呼ばれたときは、何もせず閉じる
@@ -179,7 +190,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         micReady = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         try {
             val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+                (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
+                (if (settings.musicOn) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
             startForeground(NOTIFICATION_ID, buildNotification(), types)
         } catch (e: Exception) {
             tracker = null
@@ -222,6 +234,20 @@ class RunService : Service(), SensorEventListener, LocationListener {
             sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_FASTEST)
         }
 
+        // 音楽：曲の一覧と、これまでの記録（ペースとケイデンスの関係）を読んでから、かけ始める
+        if (settings.musicOn) {
+            scope.launch {
+                val (tracks, splits) = withContext(Dispatchers.IO) { dao.tracks() to dao.recentFullSplits() }
+                if (tracker == null) return@launch
+                cadenceModel = CadenceModel(splits.map { (it.movingMs / 1000.0) to Math.round(it.steps / (it.movingMs / 60000.0)).toInt() })
+                val engine = MusicEngine(this@RunService, tracks, settings.tempoRangePercent / 100.0, settings.musicVolumePercent / 100f)
+                music = engine
+                speaker?.onSpeakingChanged = { speaking -> music?.setDucked(speaking) }
+                engine.start(musicTarget() ?: cadenceModel.cadenceFor(settings.targetPaceSec.toDouble()))
+                publish()
+            }
+        }
+
         // 心拍数の機器（時計など）が選んであれば、つないで受け取る
         startElapsedMs = SystemClock.elapsedRealtime()
         hrMissingWarned = false
@@ -260,6 +286,13 @@ class RunService : Service(), SensorEventListener, LocationListener {
         }
         val events = t.tick(now)
         for (ev in events) handleEvent(ev)
+        // 音楽のテンポを、いまの足（または目標のペース）に合わせる
+        music?.let { m ->
+            val kind = t.currentPhase?.kind
+            val phaseChanged = config.interval != null && kind != lastPhaseKind
+            lastPhaseKind = kind
+            m.update(musicTarget(), switchNow = phaseChanged)
+        }
         // 機器を選んであるのに 90秒たっても心拍数が届かなければ、一度だけ知らせる
         if (hrClient != null && !hrMissingWarned && t.maxHr == 0 && now - startElapsedMs > 90_000) {
             hrMissingWarned = true
@@ -407,6 +440,35 @@ class RunService : Service(), SensorEventListener, LocationListener {
         updateNotification()
     }
 
+    /**
+     * 音楽の目標テンポ（歩/分）。
+     * ・いまの足に合わせる：直近20秒ほどのケイデンス
+     * ・目標のペースに引っ張る：目標のペースに合うケイデンス。遅れているときは 2.5% 速めにする
+     * ・インターバルの「ゆっくり」と前後：設定した歩くテンポ
+     * 分からないとき（止まっている、まだ走り出していない）は null（いまのテンポのまま）
+     */
+    private fun musicTarget(): Double? {
+        val t = tracker ?: return null
+        val now = SystemClock.elapsedRealtime()
+        val cadence = if (t.isPaused) null else t.cadence(now)?.takeIf { it in 100..220 }?.toDouble()
+        val phase = t.currentPhase
+        if (config.interval != null && phase != null && phase.kind != PhaseKind.RUN) {
+            // 歩いている・ゆっくり走っている区間
+            return cadence?.takeIf { settings.tempoMode == "FOLLOW" } ?: settings.restTempo.toDouble()
+        }
+        val result = if (settings.tempoMode == "PACE") {
+            val goal = settings.targetPaceSec.toDouble()
+            val base = cadenceModel.cadenceFor(goal)
+            val pace = t.currentPace()
+            if (pace != null && pace > goal + 5) base * 1.025 else base
+        } else {
+            // 走り出す前は、いつものペースでのケイデンスを目安にする
+            cadence ?: lastRunTempo.takeIf { it > 0 } ?: if (t.distanceM < 30) cadenceModel.cadenceFor(settings.targetPaceSec.toDouble()) else null
+        }
+        if (result != null && (phase == null || phase.kind == PhaseKind.RUN)) lastRunTempo = result
+        return result
+    }
+
     /** 声のメモ：押すと録音を始め、もう一度押すと止める（最長60秒） */
     private fun toggleMemo() {
         val t = tracker ?: return
@@ -462,6 +524,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         speaker?.muted = false
         tracker = null
         ticker?.cancel()
+        music?.release()
+        music = null
         hrClient?.close()
         hrClient = null
         runCatching { locationManager.removeUpdates(this) }
@@ -566,6 +630,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
             phaseRemaining = t.phaseRemaining(),
             totalReps = config.interval?.repeats ?: 0,
             intervalDone = config.interval != null && t.currentPhase == null,
+            musicOn = music != null,
+            musicTitle = music?.title.orEmpty(),
+            musicInfo = music?.info.orEmpty(),
+            musicPlaying = music?.playing == true,
             hr = t.currentHr(now),
             zone = t.currentHr(now)?.let { t.zones.zoneOf(it) },
             hrEnabled = hrClient != null,
@@ -634,6 +702,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     override fun onDestroy() {
         // 終了の操作なしに止められた場合は、次にアプリを開いたときに App が記録を仕上げる
+        music?.release()
+        music = null
         hrClient?.close()
         hrClient = null
         if (recorder.recording) recorder.stop()
@@ -658,6 +728,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val ACTION_RESUME = "com.chill.run.RESUME"
         const val ACTION_FINISH = "com.chill.run.FINISH"
         const val ACTION_MEMO = "com.chill.run.MEMO"
+        const val ACTION_MUSIC_TOGGLE = "com.chill.run.MUSIC_TOGGLE"
+        const val ACTION_MUSIC_NEXT = "com.chill.run.MUSIC_NEXT"
         private const val MEMO_MAX_MS = 60_000L
         const val EXTRA_TYPE = "type"
         const val EXTRA_GOAL_KIND = "goalKind"

@@ -24,6 +24,7 @@ import com.chill.run.ui.HomeScreen
 import com.chill.run.ui.HrDeviceScreen
 import com.chill.run.ui.IntervalScreen
 import com.chill.run.ui.MapSaveScreen
+import com.chill.run.ui.MusicScreen
 import com.chill.run.ui.Palette
 import com.chill.run.ui.PermissionsScreen
 import com.chill.run.ui.SettingsScreen
@@ -51,6 +52,7 @@ class MainActivity : ComponentActivity() {
                         r == "settings" -> SettingsScreen(onBack = { route = "home" }, onNavigate = { route = it })
                         r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
                         r == "hrdevice" -> HrDeviceScreen(onBack = { route = "settings" })
+                        r == "music" -> MusicScreen(onBack = { route = "home" })
                         r.startsWith("interval/") -> IntervalScreen(
                             menuId = r.removePrefix("interval/").toLongOrNull() ?: 0,
                             onBack = { route = "home" },

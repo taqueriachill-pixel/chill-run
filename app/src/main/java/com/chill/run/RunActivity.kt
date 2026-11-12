@@ -76,6 +76,8 @@ class RunActivity : ComponentActivity() {
                     onMemo = { RunService.send(this, RunService.ACTION_MEMO) },
                     onPhoto = { startActivity(CaptureActivity.intent(this, video = false)) },
                     onVideo = { startActivity(CaptureActivity.intent(this, video = true)) },
+                    onMusicToggle = { RunService.send(this, RunService.ACTION_MUSIC_TOGGLE) },
+                    onMusicNext = { RunService.send(this, RunService.ACTION_MUSIC_NEXT) },
                 )
             }
         }
@@ -100,6 +102,8 @@ private fun RunScreen(
     onMemo: () -> Unit,
     onPhoto: () -> Unit,
     onVideo: () -> Unit,
+    onMusicToggle: () -> Unit,
+    onMusicNext: () -> Unit,
 ) {
     val accent = Palette.of(state.type)
     Column(
@@ -176,6 +180,20 @@ private fun RunScreen(
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 音楽：いまの曲と、止める・次の曲
+        if (state.musicOn) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF16222A)).padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(state.musicTitle.ifEmpty { "音楽の準備中…" }, color = Color.White, fontSize = 14.sp, maxLines = 1)
+                    Text(state.musicInfo, color = Palette.dim, fontSize = 11.sp, maxLines = 1)
+                }
+                MusicButton(if (state.musicPlaying) "止める" else "流す", onMusicToggle)
+                MusicButton("次の曲", onMusicNext)
+            }
+        }
         // 走りながら残す：メモ・写真・動画（1回押すだけ。汗や手袋でも押しやすい大きさ）
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             TapButton(
@@ -289,4 +307,12 @@ private fun TapButton(label: String, sub: String, color: Color, modifier: Modifi
             Text(sub, color = Color(0xCCFFFFFF), fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
+}
+
+@Composable
+private fun MusicButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.height(56.dp).clickable(onClick = onClick).padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
 }

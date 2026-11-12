@@ -46,6 +46,11 @@ data class LiveState(
     /** 心拍数の機器を使う設定になっているか、と、つながりの状態（画面に出す短い言葉） */
     val hrEnabled: Boolean = false,
     val hrStatus: String = "",
+    /** 音楽：流す設定か、いまの曲、テンポの説明、再生中か */
+    val musicOn: Boolean = false,
+    val musicTitle: String = "",
+    val musicInfo: String = "",
+    val musicPlaying: Boolean = false,
     /** 終了して保存したランの番号。保存しなかったときは -1 */
     val finishedRunId: Long? = null,
 )

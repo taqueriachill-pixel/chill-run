@@ -76,10 +76,15 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
         }
     }
 
+    /** 話し始め（true）と話し終わり（false）に呼ばれる。アプリ内の音楽の音量を下げるのに使う */
+    var onSpeakingChanged: ((Boolean) -> Unit)? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun finished() {
         if (outstanding.decrementAndGet() <= 0) {
             outstanding.set(0)
             audioManager.abandonAudioFocusRequest(focusRequest)
+            mainHandler.post { onSpeakingChanged?.invoke(false) }
         }
     }
 
@@ -107,7 +112,7 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
 
     private fun speakNow(text: String, flush: Boolean) {
         val t = tts ?: return
-        outstanding.incrementAndGet()
+        if (outstanding.incrementAndGet() == 1) mainHandler.post { onSpeakingChanged?.invoke(true) }
         audioManager.requestAudioFocus(focusRequest)
         val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume) }
         val mode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD

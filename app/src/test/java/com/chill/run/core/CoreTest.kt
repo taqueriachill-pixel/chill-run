@@ -531,4 +531,102 @@ class CoreTest {
         // 「走る」の間（0〜150秒）だけ注意が出て、「ゆっくり」の間（150〜300秒）は出ない
         assertEquals(listOf(61L to HrAlert.HIGH), alerts)
     }
+
+    // ---- 段階5 ----
+
+    /** bpm のテンポで「カッ」という短い音が鳴る、にせものの曲を作る */
+    private fun clickTrack(bpm: Double, seconds: Int, rate: Int = 22050): FloatArray {
+        val x = FloatArray(seconds * rate)
+        val rnd = Random(7)
+        val beat = 60.0 / bpm * rate
+        var k = 0
+        while (true) {
+            val start = (k * beat).toInt()
+            if (start + 400 >= x.size) break
+            // 1拍目は強く、ほかは少し弱く
+            val amp = if (k % 4 == 0) 0.9f else 0.6f
+            for (i in 0 until 400) x[start + i] += amp * (rnd.nextFloat() * 2 - 1) * (1f - i / 400f)
+            k++
+        }
+        for (i in x.indices) x[i] += 0.01f * (rnd.nextFloat() * 2 - 1) // うっすら雑音
+        return x
+    }
+
+    private fun sameTempo(found: Double, truth: Double): Boolean =
+        listOf(truth, truth * 2, truth / 2).any { Math.abs(found - it) / it < 0.015 }
+
+    @Test
+    fun bpm_detection_on_click_tracks() {
+        for (bpm in listOf(90.0, 120.0, 128.0, 150.0, 170.0, 85.0, 174.0)) {
+            val found = BpmDetector.detect(clickTrack(bpm, 30), 22050)
+            assertNotNull("BPM $bpm を調べられませんでした", found)
+            assertTrue("BPM $bpm のはずが $found", sameTempo(found!!, bpm))
+        }
+        assertEquals(null, BpmDetector.detect(FloatArray(22050 * 30), 22050)) // 無音
+        assertEquals(null, BpmDetector.detect(clickTrack(120.0, 3), 22050))    // 短すぎる
+    }
+
+    @Test
+    fun tap_tempo() {
+        val t = TapTempo()
+        var bpm: Double? = null
+        for (i in 0 until 8) bpm = t.tap(i * 353L) // 約170BPM
+        assertEquals(170.0, bpm!!, 1.0)
+        assertEquals(null, t.tap(8 * 353L + 5000)) // 間があいたら測り直し
+    }
+
+    @Test
+    fun tempo_fit_treats_double_and_half_as_same() {
+        val f = TempoMatch.fit(85.0, 170.0)!!
+        assertEquals(170.0, f.effectiveBpm, 1e-9)
+        assertEquals(1.0, f.speed, 1e-9)
+        val g = TempoMatch.fit(180.0, 172.0)!!
+        assertEquals(180.0, g.effectiveBpm, 1e-9)
+        assertEquals(0.9556, g.speed, 1e-3)
+        assertEquals(120.0, TempoMatch.fit(240.0, 126.0)!!.effectiveBpm, 1e-9)
+        assertEquals(1.1, TempoMatch.speedFor(150.0, 172.0, 0.10), 1e-9) // 幅の端で止まる
+        assertEquals(172.0 / 170.0, TempoMatch.speedFor(170.0, 172.0, 0.10), 1e-9)
+    }
+
+    @Test
+    fun pick_prefers_tracks_within_range_and_avoids_recent() {
+        val tracks = listOf(1L to 170.0, 2L to 86.0, 3L to 128.0, 4L to 100.0, 5L to 176.0)
+        // 目標 172、±10%：1（170）、2（86→172）、5（176）が入る。3（128）と 4（100）は入らない
+        val seen = HashSet<Long>()
+        repeat(200) {
+            val (id, fit, ok) = TempoMatch.pick(tracks, 172.0, 0.10, emptyList(), Random(it))!!
+            assertTrue(ok)
+            assertTrue(fit.offset <= 0.10)
+            seen += id
+        }
+        assertEquals(setOf(1L, 2L, 5L), seen)
+        // 直前にかけた曲は避ける
+        repeat(50) {
+            val (id, _, _) = TempoMatch.pick(tracks, 172.0, 0.10, listOf(1L, 2L), Random(it))!!
+            assertEquals(5L, id)
+        }
+        // 入る曲がなければ、いちばん近い曲を「幅の外」として返す
+        val (id, _, ok) = TempoMatch.pick(listOf(3L to 128.0, 4L to 100.0), 172.0, 0.10, emptyList())!!
+        assertEquals(4L, id) // 100×2=200 → 0.86、128 → 1.34
+        assertFalse(ok)
+        assertEquals(null, TempoMatch.pick(emptyList(), 172.0, 0.10, emptyList()))
+    }
+
+    @Test
+    fun cadence_model_default_and_learned() {
+        val d = CadenceModel()
+        assertFalse(d.learned)
+        assertEquals(168.0, d.cadenceFor(360.0), 1e-9)
+        assertEquals(171.0, d.cadenceFor(330.0), 1e-9)
+        // 自分の記録：6分/km で 176、5分/km で 182 くらいの人
+        val samples = (0 until 12).map { i -> (300.0 + i * 6) to (182 - Math.round(i * 0.6).toInt()) }
+        val m = CadenceModel(samples)
+        assertTrue(m.learned)
+        assertEquals(176.0, m.cadenceFor(360.0), 1.5)
+        assertEquals(182.0, m.cadenceFor(300.0), 1.5)
+        // いつも同じペースの人は、平均だけ学ぶ
+        val flat = CadenceModel(List(10) { 400.0 to 160 })
+        assertTrue(flat.learned)
+        assertEquals(160.0, flat.cadenceFor(400.0), 0.5)
+    }
 }

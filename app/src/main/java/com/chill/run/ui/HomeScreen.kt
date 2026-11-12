@@ -57,6 +57,9 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     var aim by remember { mutableStateOf(settings.lastAim) }
     val hasHrDevice = settings.hrDeviceAddress.isNotEmpty()
     val dao = remember { AppDb.get(context).runDao() }
+    val allTracks by remember { dao.observeTracks() }.collectAsState(initial = emptyList())
+    val trackCount = allTracks.count { it.enabled && it.bpm > 0 }
+    var musicOn by remember { mutableStateOf(settings.musicOn) }
     val menus by remember { dao.observeMenus() }.collectAsState(initial = emptyList())
     var menuId by remember { mutableLongStateOf(settings.lastMenuId) }
     val menu = menus.firstOrNull { it.id == menuId } ?: menus.firstOrNull()
@@ -179,6 +182,17 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     "インターバルの「走る」は、ゾーン ${zoneText(settings.intervalZoneLo, settings.intervalZoneHi)} が目標です。走る前に、時計を「走るモード」にしてください。",
                     color = Palette.dim, fontSize = 13.sp,
                 )
+            }
+
+            Card {
+                SectionTitle("音楽")
+                if (trackCount == 0) {
+                    Text("曲のフォルダを選ぶと、走るテンポに合わせて音楽を流せます。", color = Palette.dim, fontSize = 13.sp)
+                } else {
+                    SwitchRow("音楽を流す（テンポを足に合わせる）", musicOn) { musicOn = it; settings.musicOn = it }
+                    Text("BPM の分かる曲：$trackCount 曲", color = Palette.dim, fontSize = 13.sp)
+                }
+                SmallButton("曲とテンポの設定", Modifier.fillMaxWidth()) { onNavigate("music") }
             }
 
             if (!hasLocation) {

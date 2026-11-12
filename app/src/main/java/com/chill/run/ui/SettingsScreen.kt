@@ -240,6 +240,12 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
         }
 
         Card {
+            SectionTitle("音楽")
+            Text("曲のフォルダ、BPM の一覧と修正、速さを変える幅、目標テンポの決め方。", color = Palette.dim, fontSize = 13.sp)
+            SmallButton("音楽の設定", Modifier.fillMaxWidth()) { onNavigate("music") }
+        }
+
+        Card {
             SectionTitle("走りながら残す")
             Text("動画の長さ", color = Palette.dim, fontSize = 13.sp)
             Stepper(

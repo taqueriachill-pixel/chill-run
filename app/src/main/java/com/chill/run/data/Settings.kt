@@ -92,6 +92,41 @@ class Settings(context: Context) {
         get() = p.getBoolean("videoStabilize", true)
         set(v) = p.edit().putBoolean("videoStabilize", v).apply()
 
+    // ---- 音楽 ----
+    /** 曲のフォルダ。選んでいなければ空 */
+    var musicFolder: String
+        get() = p.getString("musicFolder", "") ?: ""
+        set(v) = p.edit().putString("musicFolder", v).apply()
+
+    /** ランで音楽を流すか */
+    var musicOn: Boolean
+        get() = p.getBoolean("musicOn", false)
+        set(v) = p.edit().putBoolean("musicOn", v).apply()
+
+    /** 速さを変える幅（%）。5〜15 */
+    var tempoRangePercent: Int
+        get() = p.getInt("tempoRangePercent", 10)
+        set(v) = p.edit().putInt("tempoRangePercent", v).apply()
+
+    /** 目標テンポの決め方："FOLLOW"（いまの足に合わせる）か "PACE"（目標のペースに引っ張る） */
+    var tempoMode: String
+        get() = p.getString("tempoMode", "FOLLOW") ?: "FOLLOW"
+        set(v) = p.edit().putString("tempoMode", v).apply()
+
+    /** 目標のペース（秒/km） */
+    var targetPaceSec: Int
+        get() = p.getInt("targetPaceSec", 360)
+        set(v) = p.edit().putInt("targetPaceSec", v).apply()
+
+    /** インターバルの「ゆっくり」のときの目標テンポ */
+    var restTempo: Int
+        get() = p.getInt("restTempo", 120)
+        set(v) = p.edit().putInt("restTempo", v).apply()
+
+    var musicVolumePercent: Int
+        get() = p.getInt("musicVolumePercent", 100)
+        set(v) = p.edit().putInt("musicVolumePercent", v).apply()
+
     // ---- 心拍数 ----
     /** 心拍数を受け取る機器（時計など）の番号と名前。選んでいなければ空 */
     var hrDeviceAddress: String
