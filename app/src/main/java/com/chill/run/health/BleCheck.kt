@@ -27,7 +27,7 @@ object BleCheck {
     val HR_SERVICE: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
     val HR_MEASUREMENT: UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
     private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-    private val NAME_HINT = Regex("amazfit|powerbuds|zepp|huami", RegexOption.IGNORE_CASE)
+    private val NAME_HINT = Regex("amazfit|powerbuds|zepp|huami|btalk|zeblaze", RegexOption.IGNORE_CASE)
 
     private class Candidate(val device: BluetoothDevice, val name: String, val advertisesHr: Boolean, val how: String)
 
@@ -84,8 +84,10 @@ object BleCheck {
         runCatching {
             for (d in adapter.bondedDevices.orEmpty()) {
                 val name = d.name ?: ""
-                if (NAME_HINT.containsMatchIn(name) && candidates.none { it.device.address == d.address }) {
-                    candidates += Candidate(d, name, false, "ペアリング済みの機器")
+                // 音楽専用（クラシック）の機器は除き、心拍数を流せる種類の機器は名前に関係なく試す
+                val canBeLe = d.type == BluetoothDevice.DEVICE_TYPE_LE || d.type == BluetoothDevice.DEVICE_TYPE_DUAL
+                if ((canBeLe || NAME_HINT.containsMatchIn(name)) && candidates.none { it.device.address == d.address }) {
+                    candidates += Candidate(d, name.ifEmpty { "（名前なし）" }, false, "ペアリング済みの機器")
                 }
             }
         }
@@ -97,7 +99,7 @@ object BleCheck {
 
         // 2) 候補に1台ずつつないで、中身を見る
         var anyValues = false
-        for (c in candidates.sortedByDescending { it.advertisesHr }.take(5)) {
+        for (c in candidates.sortedByDescending { (if (it.advertisesHr) 2 else 0) + (if (NAME_HINT.containsMatchIn(it.name)) 1 else 0) }.take(6)) {
             onProgress("${c.name} につないで調べています…")
             sb.appendLine()
             sb.appendLine("■ ${c.name}（…${c.device.address.takeLast(5)}、${c.how}）")
