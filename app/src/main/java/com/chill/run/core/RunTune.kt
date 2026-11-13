@@ -454,51 +454,35 @@ object RunTune {
             if (note > low + 9) note -= 12
             return note.coerceAtLeast(28)
         }
-        /** 主旋律の楽器。寒い日はビブラフォン、そうでなければ型ごとの音 */
-        fun top(time: Double, dur: Double, midi: Int, amp: Double, pan: Double) {
-            when {
-                cold || plan.style == TuneStyle.JAZZY -> st.vibes(time, midi, amp * 1.1, pan)
-                plan.style == TuneStyle.CLUB -> st.lead(time, dur, midi, amp * 0.8, pan)
-                else -> st.ep(time, dur, midi, amp, pan)
-            }
-        }
         /**
-         * 旋律：1小節ぶんの短い「ひとふし」を作り、和音に合わせてくり返す（少しずつ形を変える）。
-         * 拍の頭の音は、その和音の音に寄せる。
+         * 合いの手：ずっと鳴る主旋律は入れない（どの楽器も同じ線をなぞって、安っぽく聞こえるため）。
+         * 代わりに、2小節ごとの「区切りの直前」、和音とドラムが一息つく所だけに、2〜4音の短いフレーズを置く。
+         * 音は拍の裏から入り、次の和音の音に着地する。全部の区切りには入れない（間を残す）。
          */
-        fun melody(fromBeat: Int, lowest: Int, density: Int, amp: Double, lazy: Double, withEcho: Boolean) {
+        fun answer(lowest: Int, amp: Double, chance: Int, voice: (time: Double, dur: Double, midi: Int, amp: Double) -> Unit) {
             val notes = melodyNotes(plan, lowest)
-            // ひとふしのリズム（拍の位置と長さ）。8分音符のます目から、いくつか選ぶ
-            val grid = (0 until 8).map { it * 0.5 }.filter { rng.nextInt(8) < density || it == 0.0 }.take(6)
-            var idx = notes.size / 2 + rng.nextInt(3) - 1
-            val steps = grid.map { intArrayOf(-2, -1, -1, 1, 1, 2, 0)[rng.nextInt(7)] }
-            var bar = fromBeat / 4
-            while (bar * 4 < plan.beats) {
-                var cursor = idx
-                for ((k, posInBar) in grid.withIndex()) {
-                    val pos = bar * 4 + posInBar
-                    if (pos < fromBeat || pos >= plan.beats - 0.25) continue
-                    cursor = (cursor + steps[k]).coerceIn(1, notes.size - 2)
-                    val chordPcs = chordAt(pos).pitchClasses(plan.rootMidi)
-                    if (posInBar % 1.0 == 0.0) {
-                        // 拍の頭：近くにある和音の音へ
-                        cursor = (cursor - 2..cursor + 2).filter { it in notes.indices && Math.floorMod(notes[it], 12) in chordPcs }
-                            .minByOrNull { abs(it - cursor) } ?: cursor
-                    }
-                    val next = grid.getOrNull(k + 1) ?: 4.0
-                    val dur = ((next - posInBar) * beat * 0.9).coerceAtMost(beat * 1.5)
-                    val time = at(pos) + lazy
-                    val velocity = amp * (0.8 + rng.nextDouble() * 0.3) * (if (posInBar % 1.0 == 0.0) 1.0 else 0.85)
-                    top(time, dur, notes[cursor], velocity, 0.15)
-                    if (withEcho) {
-                        // やまびこ（付点8分おくれ）を、左右に振る
-                        top(time + beat * 0.75, dur * 0.7, notes[cursor], velocity * 0.35, -0.6)
-                        top(time + beat * 1.5, dur * 0.6, notes[cursor], velocity * 0.16, 0.6)
+            var phraseEnd = 8
+            while (phraseEnd <= plan.beats) {
+                if (rng.nextInt(10) < chance) {
+                    val count = 2 + rng.nextInt(3)
+                    // 着地する音：次の和音（最後なら終わりの和音）の音のうち、真ん中あたり
+                    val nextChord = if (phraseEnd >= plan.beats) finalChord else chordAt(phraseEnd.toDouble())
+                    val pcs = nextChord.pitchClasses(plan.rootMidi)
+                    val landing = notes.indices.filter { Math.floorMod(notes[it], 12) in pcs }
+                        .minByOrNull { abs(it - notes.size / 2) } ?: (notes.size / 2)
+                    // 上から下りてくるか、下から上がってくる
+                    val down = rng.nextBoolean()
+                    // 最後の音は、次の小節の「半拍前」（先取り）。そこから逆算して、8分か16分の間隔で並べる
+                    val spacing = if (count == 4) 0.25 else 0.5
+                    for (k in 0 until count) {
+                        val pos = phraseEnd - 0.5 - spacing * (count - 1 - k)
+                        val offset = (count - 1 - k) * (if (down) 1 else -1)
+                        val idx = (landing + offset).coerceIn(0, notes.size - 1)
+                        val last = k == count - 1
+                        voice(at(pos, 0.006), if (last) beat * 1.2 else beat * 0.35, notes[idx], amp * (if (last) 1.0 else 0.75 + rng.nextDouble() * 0.2))
                     }
                 }
-                // 次の小節は、同じ形で少し動かす（問いかけと答えのように）
-                idx = (idx + intArrayOf(-1, 0, 1, 2)[rng.nextInt(4)]).coerceIn(2, notes.size - 3)
-                bar++
+                phraseEnd += 8
             }
         }
 
@@ -541,7 +525,8 @@ object RunTune {
                         }
                     }
                 }
-                melody(fromBeat = if (sparse) 4 else 0, lowest = plan.rootMidi + 19, density = if (sparse) 2 else 3, amp = 0.085, lazy = 0.02, withEcho = false)
+                // 合いの手：エレピ（寒い日はビブラフォン）で、区切りの前だけ。少し後ろにもたれる
+                answer(plan.rootMidi + 19, 0.075, if (sparse) 4 else 7) { t, d, m, a -> if (cold) st.vibes(t + 0.02, m, a, 0.35) else st.ep(t + 0.02, d, m, a, 0.35) }
             }
 
             // ================= ジャジー（スウィング） =================
@@ -583,7 +568,8 @@ object RunTune {
                         }
                     }
                 }
-                melody(fromBeat = 0, lowest = plan.rootMidi + 19, density = if (sparse) 3 else 5, amp = 0.10, lazy = 0.0, withEcho = false)
+                // 合いの手：ビブラフォンが、ピアノの合いの手のすき間に短く答える
+                answer(plan.rootMidi + 22, 0.09, if (sparse) 5 else 8) { t, _, m, a -> st.vibes(t, m, a, 0.4) }
             }
 
             // ================= ディープハウス ／ クラブ =================
@@ -648,8 +634,13 @@ object RunTune {
                         }
                     }
                 }
-                // 後半から、短い旋律（クラブは、やまびこつきの長めの音）
-                melody(fromBeat = 8, lowest = plan.rootMidi + 24, density = if (club) 2 else 3, amp = if (club) 0.10 else 0.085, lazy = 0.0, withEcho = true)
+                // 旋律は入れない。和音のひと突き（ハウス）と分散和音（クラブ）がフックになる。
+                // 2小節目の終わりにだけ、遠くで鳴るような短い合いの手（やまびこつき）を、ときどき
+                answer(plan.rootMidi + 24, 0.06, 4) { t, d, m, a ->
+                    if (cold) st.vibes(t, m, a, 0.5) else st.ep(t, d, m, a, 0.5)
+                    st.ep(t + beat * 0.75, d * 0.7, m, a * 0.35, -0.6)
+                    st.ep(t + beat * 1.5, d * 0.6, m, a * 0.15, 0.6)
+                }
             }
         }
 
