@@ -243,6 +243,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 val engine = MusicEngine(this@RunService, tracks, settings.tempoRangePercent / 100.0, settings.musicVolumePercent / 100f)
                 music = engine
                 speaker?.onSpeakingChanged = { speaking -> music?.setDucked(speaking) }
+                // インターバルの最初の区間で、かけたばかりの曲をすぐ切り替えてしまわないようにする
+                lastPhaseKind = tracker?.currentPhase?.kind
                 engine.start(musicTarget() ?: cadenceModel.cadenceFor(settings.targetPaceSec.toDouble()))
                 publish()
             }

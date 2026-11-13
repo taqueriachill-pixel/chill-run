@@ -21,6 +21,21 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.chill.run.core.TempoMatch
 import com.chill.run.data.TrackEntity
 
+/** 音楽がいつ・なぜ切り替わったかの覚え書き（直近40件）。「実機チェック」で見られる */
+object MusicLog {
+    private val lines = ArrayDeque<String>()
+    private val fmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+
+    @Synchronized
+    fun add(text: String) {
+        lines.addLast("${java.time.LocalTime.now().format(fmt)} $text")
+        while (lines.size > 40) lines.removeFirst()
+    }
+
+    @Synchronized
+    fun text(): String = if (lines.isEmpty()) "まだ何もありません" else lines.joinToString("\n")
+}
+
 /**
  * ランの最中に音楽を流す。
  * ・目標テンポに近い BPM の曲を選ぶ
@@ -57,6 +72,8 @@ class MusicEngine(
     private var fading = false
     private var fadeStart = 0L
     private var released = false
+    private var startedAt = 0L
+    private var lastReason = ""
 
     val hasTracks: Boolean get() = usable.isNotEmpty()
     val title: String get() = current?.let { if (it.artist.isNotEmpty()) "${it.title} / ${it.artist}" else it.title } ?: ""
@@ -75,8 +92,19 @@ class MusicEngine(
         handler.post {
             if (released) return@post
             when (change) {
-                AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> { focusPaused = true; applyPlayState() }
-                AudioManager.AUDIOFOCUS_GAIN -> { focusPaused = false; applyPlayState() }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                    MusicLog.add("ほかの音（電話など）が鳴ったので、いったん止めた")
+                    focusPaused = true; applyPlayState()
+                }
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    // ほかのアプリが音楽などを流し始めた。勝手には戻らないので、「流す」を押すまで止めておく
+                    MusicLog.add("ほかのアプリが音を使い始めたので止めた（「流す」で再開）")
+                    userPaused = true; applyPlayState()
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    if (focusPaused) MusicLog.add("ほかの音が終わったので再開した")
+                    focusPaused = false; applyPlayState()
+                }
             }
         }
     }
@@ -91,9 +119,9 @@ class MusicEngine(
     // ---- イヤホンのボタン ----
     private val session = MediaSession(appContext, "ChillRunMusic").apply {
         setCallback(object : MediaSession.Callback() {
-            override fun onPlay() = setUserPaused(false)
-            override fun onPause() = setUserPaused(true)
-            override fun onSkipToNext() = next()
+            override fun onPlay() = setUserPaused(false, "イヤホンや時計のボタン")
+            override fun onPause() = setUserPaused(true, "イヤホンや時計のボタン")
+            override fun onSkipToNext() = next("イヤホンや時計のボタン")
         }, handler)
     }
 
@@ -104,12 +132,13 @@ class MusicEngine(
         addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 // 曲が最後まで行った（重ねて切り替える前に終わった）ときは、次の曲へ
-                if (state == Player.STATE_ENDED && this@apply === players[active] && !fading) switchTo(pickNext(), fade = false)
+                if (state == Player.STATE_ENDED && this@apply === players[active] && !fading) switchTo(pickNext(), fade = false, reason = "曲が最後まで行った")
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 // 読めない曲は飛ばす
-                if (this@apply === players[active]) handler.post { if (!released) switchTo(pickNext(), fade = false) }
+                MusicLog.add("読めない曲：${current?.title}（${error.errorCodeName}）")
+                if (this@apply === players[active]) handler.post { if (!released) switchTo(pickNext(), fade = false, reason = "読めない曲だった") }
             }
         })
     }
@@ -120,7 +149,8 @@ class MusicEngine(
         target = initialTarget
         audioManager.requestAudioFocus(focusRequest)
         session.isActive = true
-        switchTo(pickNext(), fade = false)
+        MusicLog.add("音楽を始めた（使える曲 ${usable.size} 曲、目標 ${Math.round(initialTarget)}、幅 ±${Math.round(range * 100)}%）")
+        switchTo(pickNext(), fade = false, reason = "最初の曲")
     }
 
     private fun pickNext(): Triple<TrackEntity, TempoMatch.Fit, Boolean>? {
@@ -129,9 +159,14 @@ class MusicEngine(
         return Triple(track, picked.second, picked.third)
     }
 
-    private fun switchTo(choice: Triple<TrackEntity, TempoMatch.Fit, Boolean>?, fade: Boolean) {
+    private fun switchTo(choice: Triple<TrackEntity, TempoMatch.Fit, Boolean>?, fade: Boolean, reason: String) {
         if (released || choice == null) return
         val (track, fit, ok) = choice
+        val before = current
+        val playedSec = if (before != null) (SystemClock.elapsedRealtime() - startedAt) / 1000 else 0
+        MusicLog.add("切り替え［$reason］" + (if (before != null) "「${before.title}」を ${playedSec}秒 流した所で → " else "") + "「${track.title}」")
+        lastReason = reason
+        startedAt = SystemClock.elapsedRealtime()
         val old = players[active]
         val incoming = if (fade && old.isPlaying) players[1 - active] else old
         current = track
@@ -196,7 +231,7 @@ class MusicEngine(
             val next = pickNext()
             // いまの曲のままで合うなら、切り替えずに速さだけ変える
             val keep = TempoMatch.fit(current!!.bpm, target)?.let { it.offset <= range } == true
-            if (!keep && next != null && next.first.id != current!!.id) { switchTo(next, fade = true); return }
+            if (!keep && next != null && next.first.id != current!!.id) { switchTo(next, fade = true, reason = "インターバルの切り替え"); return }
             TempoMatch.fit(current!!.bpm, target)?.let { effectiveBpm = it.effectiveBpm }
         }
         // 速さは 1秒に 1% ずつ、なめらかに変える
@@ -207,24 +242,29 @@ class MusicEngine(
             speed += step
             player.playbackParameters = PlaybackParameters(speed.toFloat(), 1f)
         }
-        // 終わりの 3秒前（聞こえる時間で）になったら、次の曲を重ねて始める
-        val duration = player.duration
-        if (!fading && duration != C.TIME_UNSET && duration > 15_000 && player.isPlaying) {
+        // 終わりの 3秒前（聞こえる時間で）になったら、次の曲を重ねて始める。
+        // プレイヤーが出す「曲の長さ」は、ファイルによっては実際より短く出ることがある（途中で切れる原因になる）。
+        // そこで、曲を取り込んだときに調べた長さと比べて、長いほうを使う。長すぎた場合は、曲が最後まで行った時点で次へ進む。
+        val reported = player.duration
+        val duration = maxOf(if (reported == C.TIME_UNSET) 0L else reported, current?.durationMs ?: 0L)
+        if (!fading && duration > 15_000 && player.isPlaying && SystemClock.elapsedRealtime() - startedAt > 10_000) {
             val remaining = (duration - player.currentPosition) / speed
-            if (remaining <= FADE_MS + 500) switchTo(pickNext(), fade = true)
+            if (remaining <= FADE_MS + 500) switchTo(pickNext(), fade = true, reason = "曲の終わり（重ねて切り替え）")
         }
     }
 
-    fun next() {
+    /** @param from だれが押したか（覚え書き用） */
+    fun next(from: String = "画面のボタン") {
         if (released) return
         userPaused = false
-        switchTo(pickNext(), fade = true)
+        switchTo(pickNext(), fade = true, reason = "次の曲（$from）")
     }
 
-    fun togglePause() = setUserPaused(!userPaused)
+    fun togglePause(from: String = "画面のボタン") = setUserPaused(!userPaused, from)
 
-    private fun setUserPaused(paused: Boolean) {
+    private fun setUserPaused(paused: Boolean, from: String) {
         if (released) return
+        MusicLog.add(if (paused) "止めた（$from）" else "流した（$from）")
         userPaused = paused
         if (!paused) { focusPaused = false; audioManager.requestAudioFocus(focusRequest) }
         applyPlayState()

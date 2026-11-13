@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.chill.run.core.Geo
 import com.chill.run.health.BleCheck
 import com.chill.run.health.Health
+import com.chill.run.music.MusicLog
 import com.chill.run.run.MemoRecorder
 import com.chill.run.speech.Transcriber
 import kotlinx.coroutines.launch
@@ -184,6 +185,9 @@ fun CheckScreen(onBack: () -> Unit) {
         appendLine("【読み上げ】")
         appendLine(ttsText)
         appendLine()
+        appendLine("【音楽の動き（直近）】")
+        appendLine(MusicLog.text())
+        appendLine()
         appendLine("【声を文字にする（端末内の音声認識）】")
         appendLine(speechSupport)
         appendLine(speechTest ?: "録音からの文字化：まだ試していません")
@@ -208,6 +212,15 @@ fun CheckScreen(onBack: () -> Unit) {
             SmallButton("読み上げの設定を開く", Modifier.fillMaxWidth()) {
                 runCatching { context.startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
+        }
+
+        Card {
+            SectionTitle("音楽の動き（直近40件）")
+            Text(
+                "曲がいつ・なぜ切り替わったかの覚え書きです。おかしな切り替わりがあったら、ランを終了したあとにここを開いて「結果をコピー」で送ってください（アプリを閉じると消えます）。",
+                color = Palette.dim, fontSize = 13.sp, lineHeight = 20.sp,
+            )
+            Text(MusicLog.text(), color = Palette.text, fontSize = 12.sp, lineHeight = 18.sp)
         }
 
         Card {
