@@ -22,7 +22,7 @@ import java.util.zip.ZipOutputStream
  */
 object Backup {
     private val TABLES = listOf("runs", "points", "splits", "courses", "laps", "interval_menus", "media", "tracks")
-    private const val DB_VERSION = 6
+    private const val DB_VERSION = 7
 
     class Summary(val runs: Int, val files: Int)
 

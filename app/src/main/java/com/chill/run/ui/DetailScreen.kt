@@ -37,6 +37,8 @@ import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
 import com.chill.run.core.HeartZones
 import com.chill.run.core.PhaseKind
+import com.chill.run.core.Sky
+import com.chill.run.core.TuneMood
 import com.chill.run.data.AppDb
 import com.chill.run.data.CourseEntity
 import com.chill.run.data.HrImport
@@ -50,6 +52,7 @@ import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
 import com.chill.run.movie.MovieMaker
+import com.chill.run.run.Weather
 import com.chill.run.speech.Transcriber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -347,7 +350,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         if (points.size >= 2) {
             val movie = d.media.lastOrNull { it.kind == MediaFiles.MOVIE }
             Card {
-                SectionTitle("今日のランムービー（約10秒・縦長・音なし）")
+                SectionTitle("今日のランムービー（約10秒・縦長）")
                 val progress = movieProgress
                 if (progress != null) {
                     Text("作っています… $progress %（30秒〜1分ほどかかります。この画面を開いたままにしてください）", color = Palette.warn, fontSize = 15.sp)
@@ -362,6 +365,47 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                         }
                     } else {
                         BigButton("ランムービーを作る", Modifier.fillMaxWidth(), color = color) { makeMovie = true }
+                    }
+                    // 曲づくりの材料：天気と気温（自動で調べる。外れていたら手で直せる）
+                    if (settings.movieMusic) {
+                        val sky = TuneMood.skyOf(r.weatherCode)
+                        val skyWord = when (sky) { Sky.SUNNY -> "晴れ"; Sky.CLOUDY -> "くもり"; Sky.RAIN -> "雨"; Sky.SNOW -> "雪"; Sky.UNKNOWN -> "分からない" }
+                        val temp = r.tempC
+                        Text(
+                            "曲の材料　天気：$skyWord" +
+                                (if (temp != null && !r.weatherManual) "　気温：${Math.round(temp)}℃" else "") +
+                                (if (r.weatherManual) "（手で選んだ）" else if (r.weatherCode >= 0) "（自動）" else "（作るときに調べます）"),
+                            color = Palette.text, fontSize = 14.sp,
+                        )
+                        fun setWeather(code: Int, t: Double?) {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { dao.setWeather(r.id, t, code, true) }
+                                reload++
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("晴れ" to 0, "くもり" to 3, "雨" to 61, "雪" to 71).forEach { (label, code) ->
+                                Chip(label, r.weatherManual && r.weatherCode == code, Modifier.weight(1f), color = color) { setWeather(code, r.tempC ?: 18.0) }
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("寒い" to 5.0, "ちょうどいい" to 18.0, "暑い" to 30.0).forEach { (label, t) ->
+                                Chip(label, r.weatherManual && temp == t, Modifier.weight(1f), color = color) { setWeather(if (r.weatherCode >= 0) r.weatherCode else 3, t) }
+                            }
+                        }
+                        if (r.weatherManual) {
+                            SmallButton("天気を自動に戻す", Modifier.fillMaxWidth()) {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { dao.setWeather(r.id, null, -1, false) }
+                                    reload++
+                                }
+                            }
+                        }
+                        if (movie != null && movie.text.isNotBlank()) Text("いまの曲：${movie.text}", color = Palette.dim, fontSize = 13.sp)
+                        Text(
+                            "曲は、ロードかトレイルか・今日の体調（またはメモの言葉）・天気・気温・心拍数から、その場で作ります。「作り直す」たびに別の曲になります。${Weather.ATTRIBUTION}",
+                            color = Palette.dim, fontSize = 12.sp,
+                        )
                     }
                     Text(
                         "地図の上にルートが描かれ、写真・動画（最大4つ）と数字が続きます。" +

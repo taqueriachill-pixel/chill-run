@@ -62,4 +62,13 @@ object MigrationSql {
         "ALTER TABLE `runs` ADD COLUMN `memo` TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE `runs` ADD COLUMN `condition` INTEGER NOT NULL DEFAULT 0",
     )
+
+    /** 版6 までの runs 表にある項目 */
+    val RUNS_V6_COLUMNS = RUNS_V5_COLUMNS + setOf("best1kMs", "best5kMs", "best10kMs", "memo", "condition")
+
+    val V6_TO_7 = listOf(
+        "ALTER TABLE `runs` ADD COLUMN `tempC` REAL",
+        "ALTER TABLE `runs` ADD COLUMN `weatherCode` INTEGER NOT NULL DEFAULT -1",
+        "ALTER TABLE `runs` ADD COLUMN `weatherManual` INTEGER NOT NULL DEFAULT 0",
+    )
 }

@@ -17,17 +17,17 @@ import java.io.File
  * 版を上げるときは、下の4か所（版の番号、命令、新しい表、前の版の項目の数）を書きかえる。
  */
 class MigrationTest {
-    private val version = 6
-    private val statements = MigrationSql.V5_TO_6
+    private val version = 7
+    private val statements = MigrationSql.V6_TO_7
     private val newTables = emptySet<String>()
 
-    /** 前の版（5）の、今回は形を変えていない表の項目の数。項目を足したのに引っ越しを書き忘れると、ここで気づける */
+    /** 前の版（6）の、今回は形を変えていない表の項目の数。項目を足したのに引っ越しを書き忘れると、ここで気づける */
     private val before = mapOf(
         "points" to 11, "splits" to 9, "courses" to 4, "laps" to 7, "interval_menus" to 8, "media" to 11, "tracks" to 9,
     )
 
     /** 今回、項目を足した表と、前の版にあった項目 */
-    private val altered = mapOf("runs" to MigrationSql.RUNS_V5_COLUMNS)
+    private val altered = mapOf("runs" to MigrationSql.RUNS_V6_COLUMNS)
 
     private fun currentSchema(): JSONObject {
         val dir = listOf("schemas", "app/schemas").map { File(it, "com.chill.run.data.AppDb") }.first { it.exists() }

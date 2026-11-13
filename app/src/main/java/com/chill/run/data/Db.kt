@@ -66,6 +66,13 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "") val memo: String = "",
     /** 今日の体調（1〜5）。付けていなければ 0 */
     @ColumnInfo(defaultValue = "0") val condition: Int = 0,
+    // ---- ここから、ランムービーの曲のために追加 ----
+    /** 走ったときの気温（℃）。分からなければ null */
+    val tempC: Double? = null,
+    /** 走ったときの天気（世界共通の WMO コード）。分からなければ -1 */
+    @ColumnInfo(defaultValue = "-1") val weatherCode: Int = -1,
+    /** 天気と気温を、手で選んだか（手で選んだものは、自動では書き換えない） */
+    @ColumnInfo(defaultValue = "0") val weatherManual: Boolean = false,
 )
 
 /** いつものコース */
@@ -262,6 +269,9 @@ interface RunDao {
     @Query("UPDATE runs SET best1kMs = :b1, best5kMs = :b5, best10kMs = :b10 WHERE id = :runId")
     suspend fun setBests(runId: Long, b1: Long, b5: Long, b10: Long)
 
+    @Query("UPDATE runs SET tempC = :tempC, weatherCode = :code, weatherManual = :manual WHERE id = :runId")
+    suspend fun setWeather(runId: Long, tempC: Double?, code: Int, manual: Boolean)
+
     @Query("UPDATE runs SET memo = :memo, condition = :condition WHERE id = :runId")
     suspend fun setMemo(runId: Long, memo: String, condition: Int)
 
@@ -348,7 +358,7 @@ suspend fun RunDao.deleteRun(runId: Long) {
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
         IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -360,7 +370,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build().also { instance = it }
         }
     }
@@ -398,5 +408,12 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
 val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V5_TO_6.forEach { db.execSQL(it) }
+    }
+}
+
+/** 天気と気温の項目を足す（ランムービーの曲づくり用） */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V6_TO_7.forEach { db.execSQL(it) }
     }
 }

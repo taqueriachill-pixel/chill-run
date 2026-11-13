@@ -601,6 +601,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
             val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
             withTimeoutOrNull(4000) { hcJob?.join() }
             RunHub.state.value = LiveState(finishedRunId = if (keep) id else -1)
+            // 天気と気温を調べておく（ランムービーの曲づくりに使う。通信できなければ何もしない）
+            if (keep && !autoMovie) launch { runCatching { Weather.ensureForRun(context, id) } }
             // 設定で「自動で作る」にしてあれば、ランムービーを作っておく（数十秒かかるので、画面は先に進める）
             if (keep && autoMovie) launch { runCatching { MovieMaker.make(context, id) } }
             delay(8000)

@@ -20,9 +20,12 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.compose.ui.graphics.asAndroidBitmap
 import com.chill.run.core.Fmt
+import com.chill.run.core.HeartZones
 import com.chill.run.core.MapMath
 import com.chill.run.core.MovieScript
+import com.chill.run.core.RunTune
 import com.chill.run.core.Tile
+import com.chill.run.core.TuneMood
 import com.chill.run.core.Yuv
 import com.chill.run.data.AppDb
 import com.chill.run.data.MediaEntity
@@ -31,6 +34,7 @@ import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
 import com.chill.run.data.Settings
 import com.chill.run.data.TileStore
+import com.chill.run.run.Weather
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -45,13 +49,14 @@ import kotlin.math.floor
 import kotlin.math.pow
 
 /**
- * 10秒の「今日のランムービー」を、スマホの中だけで作る。縦長（9:16、720×1280）、音なし。
+ * 10秒の「今日のランムービー」を、スマホの中だけで作る。縦長（9:16、720×1280）。曲も、その場で作って入れる。
  * 1コマずつ絵を描いて、動画に固めていく。
  */
 object MovieMaker {
     private const val W = 720
     private const val H = 1280
     private const val TILE_PX = 384.0 // 地図の文字が読めるよう、タイルを 1.5倍で描く
+    private const val AUDIO_RATE = 44100
     private val lock = Mutex()
     private val ROAD = Color.parseColor("#2E9BD6")
     private val TRAIL = Color.parseColor("#3DAA6B")
@@ -69,10 +74,15 @@ object MovieMaker {
         val media: List<List<Bitmap>>,           // 写真は1枚、動画は何コマか
         val caption: String,
         val monthKm: Double,
+        /** その場で作った曲（入れないときは null）と、その説明 */
+        val tune: FloatArray?,
+        val tuneNote: String,
     )
 
     /** @return できた動画の記録。onProgress には 0〜100 が渡る */
     suspend fun make(context: Context, runId: Long, onProgress: (Int) -> Unit = {}): Result<MediaEntity> = lock.withLock {
+        // 曲づくりの材料にする天気を、まだなら調べておく（通信できなければ、天気なしで作る）
+        runCatching { Weather.ensureForRun(context.applicationContext, runId) }
         withContext(Dispatchers.Default) {
             runCatching {
                 val app = context.applicationContext
@@ -100,6 +110,8 @@ object MovieMaker {
                 val entity = MediaEntity(
                     runId = runId, kind = MediaFiles.MOVIE, time = System.currentTimeMillis(),
                     lat = null, lon = null, distM = run.distanceM, file = relative, durationMs = (MovieScript.TOTAL_SEC * 1000).toLong(),
+                    // 曲をどう決めたかを、残しておく（記録の画面に出す）
+                    text = scene.tuneNote,
                 )
                 val id = dao.insertMedia(entity)
                 onProgress(100)
@@ -189,7 +201,29 @@ object MovieMaker {
         }.sumOf { it.distanceM } / 1000.0
         val place = if (run.courseId > 0) dao.course(run.courseId)?.name.orEmpty() else ""
 
-        return Scene(run, place, if (run.type == "TRAIL") TRAIL else ROAD, map, segments, elevation, media, caption, monthKm)
+        // 曲：ランの内容（ロードかトレイルか、気分、天気、気温、がんばり具合）から、その場で作る。毎回ちがう曲になる
+        var tune: FloatArray? = null
+        var tuneNote = ""
+        val settings = Settings(context)
+        if (settings.movieMusic) {
+            val words = (listOf(run.memo) + all.filter { it.kind == MediaFiles.MEMO }.map { it.text }).joinToString(" ")
+            val zones = HeartZones(settings.maxHr, settings.restHr)
+            val hr = points.mapNotNull { it.hr }
+            val mood = TuneMood(
+                trail = run.type == "TRAIL",
+                // 「今日の体調」を付けてあればそれを、なければメモの言葉から
+                feeling = if (run.condition > 0) run.condition - 3 else TuneMood.feelingFromWords(words),
+                tempC = run.tempC,
+                sky = TuneMood.skyOf(run.weatherCode),
+                effort = if (hr.size >= 30) hr.count { zones.zoneOf(it) >= 4 }.toDouble() / hr.size + 0.2 else 0.3,
+            )
+            val seed = System.nanoTime()
+            val plan = RunTune.plan(mood, seed)
+            tune = RunTune.render(plan, seed, MovieScript.TOTAL_SEC, AUDIO_RATE)
+            tuneNote = plan.description
+        }
+
+        return Scene(run, place, if (run.type == "TRAIL") TRAIL else ROAD, map, segments, elevation, media, caption, monthKm, tune, tuneNote)
     }
 
     private fun loadPhoto(file: File): Bitmap =
@@ -368,6 +402,67 @@ object MovieMaker {
 
     // ---------- 動画に固める ----------
 
+    private class EncodedAudio(val format: MediaFormat, val samples: List<Pair<ByteArray, MediaCodec.BufferInfo>>)
+
+    /** 曲を、動画に入れられる形（AAC）に固める */
+    private fun encodeAac(pcm: FloatArray, rate: Int): EncodedAudio {
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 1).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
+            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+        }
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+        val samples = ArrayList<Pair<ByteArray, MediaCodec.BufferInfo>>()
+        var outFormat: MediaFormat? = null
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+            val info = MediaCodec.BufferInfo()
+            var pos = 0
+            var inputDone = false
+            var outputDone = false
+            val deadline = System.currentTimeMillis() + 30_000
+            while (!outputDone && System.currentTimeMillis() < deadline) {
+                if (!inputDone) {
+                    val inIndex = codec.dequeueInputBuffer(10_000)
+                    if (inIndex >= 0) {
+                        val buf = codec.getInputBuffer(inIndex)!!
+                        buf.clear()
+                        buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val count = minOf(buf.capacity() / 2, pcm.size - pos)
+                        val pts = pos * 1_000_000L / rate
+                        if (count <= 0) {
+                            codec.queueInputBuffer(inIndex, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            for (i in 0 until count) buf.putShort((pcm[pos + i].coerceIn(-1f, 1f) * 32767).toInt().toShort())
+                            codec.queueInputBuffer(inIndex, 0, count * 2, pts, 0)
+                            pos += count
+                        }
+                    }
+                }
+                val outIndex = codec.dequeueOutputBuffer(info, 10_000)
+                if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    outFormat = codec.outputFormat
+                } else if (outIndex >= 0) {
+                    val buf = codec.getOutputBuffer(outIndex)
+                    if (buf != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        val bytes = ByteArray(info.size)
+                        buf.position(info.offset)
+                        buf.get(bytes)
+                        samples += bytes to MediaCodec.BufferInfo().apply { set(0, bytes.size, info.presentationTimeUs, info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv()) }
+                    }
+                    codec.releaseOutputBuffer(outIndex, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                }
+            }
+        } finally {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+        }
+        return EncodedAudio(outFormat ?: error("曲を固められませんでした"), samples)
+    }
+
     private suspend fun encode(file: File, scene: Scene, onFrame: (Int) -> Unit) = withContext(Dispatchers.Default) {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, W, H).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
@@ -386,6 +481,8 @@ object MovieMaker {
         val info = MediaCodec.BufferInfo()
         var track = -1
         var muxing = false
+        // 曲がうまく固められなかったときは、音なしで作る
+        val audio = scene.tune?.let { pcm -> runCatching { encodeAac(pcm, AUDIO_RATE) }.getOrNull() }
         try {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             codec.start()
@@ -421,8 +518,13 @@ object MovieMaker {
                     val outIndex = codec.dequeueOutputBuffer(info, if (inputDone) 10_000 else 0)
                     if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         track = muxer.addTrack(codec.outputFormat)
+                        val audioTrack = if (audio != null && audio.samples.isNotEmpty()) muxer.addTrack(audio.format) else -1
                         muxer.start()
                         muxing = true
+                        // 曲は短いので、先にまとめて書き込む
+                        if (audio != null && audioTrack >= 0) {
+                            for ((bytes, sampleInfo) in audio.samples) muxer.writeSampleData(audioTrack, java.nio.ByteBuffer.wrap(bytes), sampleInfo)
+                        }
                     } else if (outIndex >= 0) {
                         val buf = codec.getOutputBuffer(outIndex)
                         if (buf != null && info.size > 0 && muxing && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {

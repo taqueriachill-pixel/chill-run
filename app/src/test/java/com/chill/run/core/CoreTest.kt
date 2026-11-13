@@ -726,4 +726,74 @@ class CoreTest {
         assertEquals(3, MovieScript.mediaSlot(8.4, 4).first)
         assertEquals(0, MovieScript.mediaSlot(8.4, 1).first)
     }
+
+    // ---- ランムービーの曲 ----
+
+    private fun rms(x: FloatArray, from: Int = 0, to: Int = x.size): Double {
+        var s = 0.0
+        for (i in from until to) s += x[i] * x[i]
+        return Math.sqrt(s / (to - from))
+    }
+
+    @Test
+    fun tune_is_audible_bounded_and_ten_seconds() {
+        val moods = listOf(
+            TuneMood(trail = false, feeling = 2, tempC = 18.0, sky = Sky.SUNNY, effort = 0.8),
+            TuneMood(trail = true, feeling = -2, tempC = 3.0, sky = Sky.RAIN, effort = 0.2),
+            TuneMood(trail = true, feeling = 0, tempC = 31.0, sky = Sky.CLOUDY),
+            TuneMood(trail = false, feeling = 0, sky = Sky.SNOW),
+            TuneMood(trail = false),
+        )
+        for ((i, mood) in moods.withIndex()) {
+            val plan = RunTune.plan(mood, 100L + i)
+            val x = RunTune.render(plan, 100L + i, 10.0, 22050)
+            assertEquals(220500, x.size)
+            assertTrue("音が大きすぎます", x.all { Math.abs(it) <= 1.0f })
+            assertTrue("音が小さすぎます（${plan.description}）", rms(x) > 0.05)
+            // 出だし・本編・終わりのどこも、無音になっていない
+            assertTrue(rms(x, 0, 22050) > 0.005)
+            assertTrue(rms(x, 22050 * 4, 22050 * 6) > 0.05)
+            assertTrue(rms(x, 22050 * 9, 22050 * 9 + 11000) > 0.005)
+            // 最後は、ぷつっと切れずに静かに終わる
+            assertTrue(Math.abs(x.last()) < 0.01f)
+            assertTrue(plan.bpm in 84..138)
+        }
+    }
+
+    @Test
+    fun tune_changes_with_seed_and_mood_but_repeats_for_same_seed() {
+        val mood = TuneMood(trail = false, feeling = 1, sky = Sky.SUNNY)
+        val a = RunTune.render(RunTune.plan(mood, 1), 1, 10.0, 11025)
+        val a2 = RunTune.render(RunTune.plan(mood, 1), 1, 10.0, 11025)
+        val b = RunTune.render(RunTune.plan(mood, 2), 2, 10.0, 11025)
+        assertTrue(a.contentEquals(a2))
+        assertFalse(a.contentEquals(b))
+        // 気分と天気で、調が変わる
+        assertEquals("明るい長調", RunTune.plan(TuneMood(trail = false, feeling = 1, sky = Sky.SUNNY), 5).scaleName)
+        assertEquals("しっとりした短調", RunTune.plan(TuneMood(trail = true, feeling = -1, sky = Sky.RAIN), 5).scaleName)
+        assertTrue(RunTune.plan(TuneMood(trail = true), 5).scaleName.contains("森"))
+        // つらかった雨の日は、楽しかった晴れの日より遅い
+        val slow = (1L..20L).map { RunTune.plan(TuneMood(trail = false, feeling = -2, sky = Sky.RAIN), it).bpm }.average()
+        val fast = (1L..20L).map { RunTune.plan(TuneMood(trail = false, feeling = 2, sky = Sky.SUNNY, effort = 0.9), it).bpm }.average()
+        assertTrue(fast - slow > 15)
+        // 説明に、決め手が入っている
+        val text = RunTune.plan(TuneMood(trail = true, feeling = 1, tempC = 4.0, sky = Sky.SUNNY), 3).description
+        assertTrue(text, text.contains("トレイル") && text.contains("楽しかった") && text.contains("晴れ") && text.contains("寒い") && text.contains("鈴"))
+    }
+
+    @Test
+    fun weather_code_and_words() {
+        assertEquals(Sky.SUNNY, TuneMood.skyOf(0))
+        assertEquals(Sky.CLOUDY, TuneMood.skyOf(3))
+        assertEquals(Sky.RAIN, TuneMood.skyOf(61))
+        assertEquals(Sky.RAIN, TuneMood.skyOf(80))
+        assertEquals(Sky.SNOW, TuneMood.skyOf(73))
+        assertEquals(Sky.UNKNOWN, TuneMood.skyOf(-1))
+        assertEquals(1, TuneMood.feelingFromWords("今日は気持ちいい風で楽しかった"))
+        assertEquals(-1, TuneMood.feelingFromWords("後半きつい。足が重い"))
+        assertEquals(0, TuneMood.feelingFromWords("生田緑地を走った"))
+        assertTrue(TuneMood(trail = false, tempC = 5.0).cold)
+        assertTrue(TuneMood(trail = false, tempC = 30.0).hot)
+        assertFalse(TuneMood(trail = false).cold)
+    }
 }

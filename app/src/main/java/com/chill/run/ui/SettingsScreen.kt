@@ -65,6 +65,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
     var videoSeconds by remember { mutableIntStateOf(settings.videoSeconds) }
     var autoMovie by remember { mutableStateOf(settings.autoMovie) }
+    var movieMusic by remember { mutableStateOf(settings.movieMusic) }
     var backupMedia by remember { mutableStateOf(true) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupMessage by remember { mutableStateOf<String?>(null) }
@@ -295,6 +296,11 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
         Card {
             SectionTitle("ランムービーと、隠す場所")
             SwitchRow("走り終わったら、ランムービーを自動で作る", autoMovie) { autoMovie = it; settings.autoMovie = it }
+            SwitchRow("ランムービーに、その場で作った曲を入れる", movieMusic) { movieMusic = it; settings.movieMusic = it }
+            Text(
+                "曲は、ランの内容と天気から毎回ちがうものを作ります（既存の曲は使いません）。天気と気温は Open-Meteo に、約1km 単位に丸めた位置と日付を送って調べます。",
+                color = Palette.dim, fontSize = 12.sp,
+            )
             Text(
                 if (settings.hideZone == null) "隠す場所：決めていません" else "隠す場所：決めてあります（半径 ${Math.round(settings.hideZone!!.radiusM)}m）",
                 color = Palette.text, fontSize = 15.sp,

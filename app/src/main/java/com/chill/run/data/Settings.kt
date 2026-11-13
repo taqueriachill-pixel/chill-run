@@ -99,6 +99,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("autoMovie", false)
         set(v) = p.edit().putBoolean("autoMovie", v).apply()
 
+    /** ランムービーに、その場で作った曲を入れるか */
+    var movieMusic: Boolean
+        get() = p.getBoolean("movieMusic", true)
+        set(v) = p.edit().putBoolean("movieMusic", v).apply()
+
     /** 隠す場所（自宅など）。決めていなければ null */
     var hideZone: HideZone?
         get() {
