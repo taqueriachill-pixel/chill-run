@@ -73,6 +73,9 @@ class MusicEngine(
     private var fadeStart = 0L
     private var released = false
     private var startedAt = 0L
+    private var errorCount = 0
+    private var lastSpeedChangeAt = 0L
+    private var holdSpeedUntil = 0L
     private var lastReason = ""
 
     val hasTracks: Boolean get() = usable.isNotEmpty()
@@ -136,9 +139,30 @@ class MusicEngine(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                // 読めない曲は飛ばす
-                MusicLog.add("読めない曲：${current?.title}（${error.errorCodeName}）")
-                if (this@apply === players[active]) handler.post { if (!released) switchTo(pickNext(), fade = false, reason = "読めない曲だった") }
+                // 原因を覚え書きに残す（どこで何が起きたかが分かるように、いちばん奥の原因まで書く）
+                var cause: Throwable? = error.cause
+                val chain = StringBuilder()
+                var depth = 0
+                while (cause != null && depth < 3) {
+                    chain.append(" ← ${cause.javaClass.simpleName}: ${cause.message ?: ""}")
+                    cause.stackTrace.firstOrNull()?.let { chain.append(" @${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}") }
+                    cause = cause.cause
+                    depth++
+                }
+                MusicLog.add("再生の問題：${current?.title}（${error.errorCodeName}$chain）")
+                if (this@apply !== players[active]) return
+                handler.post {
+                    if (released) return@post
+                    if (errorCount < 2) {
+                        // 曲を飛ばさず、止まった所からもう一度流す（速さは元に戻して、変えるのをしばらく休む）
+                        errorCount++
+                        speed = 1.0
+                        holdSpeedUntil = SystemClock.elapsedRealtime() + 20_000
+                        playbackParameters = PlaybackParameters(1f, 1f)
+                        prepare()
+                        MusicLog.add("同じ曲を、止まった所から流し直した（${errorCount}回目）")
+                    } else switchTo(pickNext(), fade = false, reason = "同じ曲で問題が続いた")
+                }
             }
         })
     }
@@ -167,6 +191,7 @@ class MusicEngine(
         MusicLog.add("切り替え［$reason］" + (if (before != null) "「${before.title}」を ${playedSec}秒 流した所で → " else "") + "「${track.title}」")
         lastReason = reason
         startedAt = SystemClock.elapsedRealtime()
+        errorCount = 0
         val old = players[active]
         val incoming = if (fade && old.isPlaying) players[1 - active] else old
         current = track
@@ -234,13 +259,15 @@ class MusicEngine(
             if (!keep && next != null && next.first.id != current!!.id) { switchTo(next, fade = true, reason = "インターバルの切り替え"); return }
             TempoMatch.fit(current!!.bpm, target)?.let { effectiveBpm = it.effectiveBpm }
         }
-        // 速さは 1秒に 1% ずつ、なめらかに変える
-        val wanted = TempoMatch.speedFor(effectiveBpm, target, range)
-        val step = (wanted - speed).coerceIn(-0.01, 0.01)
-        // 0.8% より小さいずれは、そのままにする（細かく変え続けると、かえって聞きづらい）
-        if (Math.abs(wanted - speed) > 0.008) {
-            speed += step
+        // 速さは、3秒に1回、最大 2% ずつ変える（0.5% きざみ）。
+        // 毎秒こまかく変え続けると、再生の部品が止まることがあったため、変える回数を減らしている。
+        val now = SystemClock.elapsedRealtime()
+        val wanted = Math.round(TempoMatch.speedFor(effectiveBpm, target, range) * 200) / 200.0
+        if (Math.abs(wanted - speed) >= 0.01 && now - lastSpeedChangeAt >= 3000 && now >= holdSpeedUntil && !fading) {
+            speed += (wanted - speed).coerceIn(-0.02, 0.02)
+            lastSpeedChangeAt = now
             player.playbackParameters = PlaybackParameters(speed.toFloat(), 1f)
+            MusicLog.add("速さを ${Math.round(speed * 1000) / 10.0}% にした（目標 ${Math.round(target)}）")
         }
         // 終わりの 3秒前（聞こえる時間で）になったら、次の曲を重ねて始める。
         // プレイヤーが出す「曲の長さ」は、ファイルによっては実際より短く出ることがある（途中で切れる原因になる）。

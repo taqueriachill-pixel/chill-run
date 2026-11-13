@@ -78,7 +78,7 @@ dependencies {
     implementation("androidx.room:room-ktx:2.8.0")
     ksp("androidx.room:room-compiler:2.8.0")
     implementation("androidx.health.connect:connect-client:1.1.0")
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.camera:camera-core:1.4.2")
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
