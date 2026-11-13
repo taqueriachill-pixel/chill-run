@@ -200,17 +200,18 @@ object MovieMaker {
             decoder.setTargetSampleSize(sample)
         }
 
-    /** 動画から、見せる時間ぶんのコマ（0.1秒おき）を取り出す */
+    /** 動画から、見せる時間ぶんのコマ（0.15秒おき）を取り出す */
     private fun loadVideoFrames(file: File, slotSec: Double): List<Bitmap> {
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(file.path)
             val durationMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            val count = (slotSec * 10).toInt().coerceIn(1, 12)
+            // メモリを使いすぎないよう、1つの動画から最大6コマ、少し小さめの大きさで取り出す
+            val count = (slotSec * 7).toInt().coerceIn(1, 6)
             val out = ArrayList<Bitmap>()
             for (i in 0 until count) {
-                val tMs = (i * 100L).coerceAtMost((durationMs - 50).coerceAtLeast(0))
-                r.getScaledFrameAtTime(tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST, W, H)?.let { out += it }
+                val tMs = (i * 150L).coerceAtMost((durationMs - 50).coerceAtLeast(0))
+                r.getScaledFrameAtTime(tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST, W * 2 / 3, H * 2 / 3)?.let { out += it }
             }
             return out
         } finally {
