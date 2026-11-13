@@ -729,14 +729,20 @@ class CoreTest {
 
     // ---- ランムービーの曲 ----
 
-    private fun rms(x: FloatArray, from: Int = 0, to: Int = x.size): Double {
+    /** 左右2チャンネルの音の、ある区間の大きさ */
+    private fun rms(x: FloatArray, fromSec: Double, toSec: Double, rate: Int): Double {
         var s = 0.0
-        for (i in from until to) s += x[i] * x[i]
-        return Math.sqrt(s / (to - from))
+        val a = (fromSec * rate).toInt() * 2
+        val b = (toSec * rate).toInt() * 2
+        for (i in a until b) s += x[i] * x[i]
+        return Math.sqrt(s / (b - a))
     }
 
     @Test
-    fun tune_is_audible_bounded_and_ten_seconds() {
+    fun every_style_is_audible_bounded_stereo_and_ten_seconds() {
+        val rate = 22050
+        val seen = HashSet<TuneStyle>()
+        // たくさんの材料と乱数で、4つの型がすべて出てくることと、どれもちゃんと鳴ることを確かめる
         val moods = listOf(
             TuneMood(trail = false, feeling = 2, tempC = 18.0, sky = Sky.SUNNY, effort = 0.8),
             TuneMood(trail = true, feeling = -2, tempC = 3.0, sky = Sky.RAIN, effort = 0.2),
@@ -744,41 +750,76 @@ class CoreTest {
             TuneMood(trail = false, feeling = 0, sky = Sky.SNOW),
             TuneMood(trail = false),
         )
-        for ((i, mood) in moods.withIndex()) {
-            val plan = RunTune.plan(mood, 100L + i)
-            val x = RunTune.render(plan, 100L + i, 10.0, 22050)
-            assertEquals(220500, x.size)
-            assertTrue("音が大きすぎます", x.all { Math.abs(it) <= 1.0f })
-            assertTrue("音が小さすぎます（${plan.description}）", rms(x) > 0.05)
-            // 出だし・本編・終わりのどこも、無音になっていない
-            assertTrue(rms(x, 0, 22050) > 0.005)
-            assertTrue(rms(x, 22050 * 4, 22050 * 6) > 0.05)
-            assertTrue(rms(x, 22050 * 9, 22050 * 9 + 11000) > 0.005)
-            // 最後は、ぷつっと切れずに静かに終わる
-            assertTrue(Math.abs(x.last()) < 0.01f)
-            assertTrue(plan.bpm in 84..138)
+        for (seed in 1L..8L) for (mood in moods) {
+            val plan = RunTune.plan(mood, seed)
+            if (!seen.add(plan.style) && seed > 2) continue
+            val x = RunTune.render(plan, seed, 10.0, rate)
+            val label = "${plan.style} ${plan.description}"
+            assertEquals(rate * 10 * 2, x.size)
+            assertTrue("音が大きすぎます $label", x.all { Math.abs(it) <= 1.0f })
+            assertTrue("全体の音が小さすぎます $label", rms(x, 0.0, 10.0, rate) > 0.05)
+            assertTrue("出だしが無音です $label", rms(x, 0.0, 1.5, rate) > 0.003)
+            assertTrue("本編が小さすぎます $label", rms(x, 4.0, 8.0, rate) > 0.06)
+            assertTrue("終わりの和音が鳴っていません $label", rms(x, 8.5, 9.3, rate) > 0.02)
+            assertTrue("最後がぷつっと切れています $label", Math.abs(x[x.size - 1]) < 0.01f && Math.abs(x[x.size - 2]) < 0.01f)
+            // 左右で少し違う音が出ている（広がりがある）
+            var diff = 0.0
+            for (i in 0 until x.size / 2) diff += Math.abs(x[i * 2] - x[i * 2 + 1])
+            assertTrue("左右が同じ音です $label", diff / (x.size / 2) > 0.002)
         }
+        assertEquals(TuneStyle.values().toSet(), seen)
     }
 
     @Test
-    fun tune_changes_with_seed_and_mood_but_repeats_for_same_seed() {
+    fun style_follows_the_run_in_combination() {
+        fun share(mood: TuneMood, vararg styles: TuneStyle): Double =
+            (1L..400L).count { RunTune.plan(mood, it).style in styles } / 400.0
+        // 雨のつらかったトレイル → ほとんどローファイかジャジー（落ち着いた型）
+        assertTrue(share(TuneMood(trail = true, feeling = -2, sky = Sky.RAIN), TuneStyle.LOFI, TuneStyle.JAZZY) > 0.85)
+        assertTrue(share(TuneMood(trail = true, feeling = -2, sky = Sky.RAIN), TuneStyle.LOFI) > 0.5)
+        // 晴れの楽しかったロードを、がんばって走った → ほとんどハウスかクラブ（踊れる型）
+        assertTrue(share(TuneMood(trail = false, feeling = 2, sky = Sky.SUNNY, effort = 0.9), TuneStyle.HOUSE, TuneStyle.CLUB) > 0.75)
+        // ふつうのトレイル → ジャジーがいちばん多い
+        val trail = TuneMood(trail = true)
+        assertTrue(share(trail, TuneStyle.JAZZY) > share(trail, TuneStyle.HOUSE))
+        assertTrue(share(trail, TuneStyle.JAZZY) > share(trail, TuneStyle.CLUB))
+        // どの材料でも、ほかの型が出る余地は残っている（毎回ちがう曲になる）
+        assertTrue(share(TuneMood(trail = false), TuneStyle.LOFI, TuneStyle.JAZZY) > 0.1)
+    }
+
+    @Test
+    fun tempo_and_harmony_follow_each_style_conventions() {
+        for (seed in 1L..200L) {
+            val mood = TuneMood(trail = seed % 2 == 0L, feeling = (seed % 5).toInt() - 2, sky = Sky.values()[(seed % 5).toInt()], effort = (seed % 10) / 10.0)
+            val p = RunTune.plan(mood, seed)
+            when (p.style) {
+                TuneStyle.LOFI -> assertTrue(p.bpm in 70.0..86.0)
+                TuneStyle.JAZZY -> assertTrue(p.bpm in 96.0..114.0)
+                TuneStyle.HOUSE -> assertTrue(p.bpm in 120.0..126.0)
+                TuneStyle.CLUB -> { assertTrue(p.bpm in 122.0..128.0); assertEquals(1, p.tonality) }
+            }
+            // リズムは、最後の和音（8.5秒）の手前に、ちょうど収まる
+            val start = 8.5 - p.beats * 60.0 / p.bpm
+            assertTrue("${p.style} ${p.bpm}", start in 0.4..3.2)
+            // 和音は全部、7th 以上の音が入ったジャズの和音
+            assertTrue(p.chords.all { it.tones.size >= 4 })
+            assertEquals(0, p.beats % p.chordBeats)
+        }
+        // 気分と天気で、響きが変わる
+        assertEquals(0, RunTune.plan(TuneMood(trail = true, feeling = 2, sky = Sky.SUNNY), 3).let { if (it.style == TuneStyle.CLUB) 0 else it.tonality })
+        assertEquals(1, RunTune.plan(TuneMood(trail = true, feeling = -2, sky = Sky.RAIN), 3).tonality)
+    }
+
+    @Test
+    fun tune_changes_with_seed_but_repeats_for_same_seed() {
         val mood = TuneMood(trail = false, feeling = 1, sky = Sky.SUNNY)
         val a = RunTune.render(RunTune.plan(mood, 1), 1, 10.0, 11025)
         val a2 = RunTune.render(RunTune.plan(mood, 1), 1, 10.0, 11025)
         val b = RunTune.render(RunTune.plan(mood, 2), 2, 10.0, 11025)
         assertTrue(a.contentEquals(a2))
         assertFalse(a.contentEquals(b))
-        // 気分と天気で、調が変わる
-        assertEquals("明るい長調", RunTune.plan(TuneMood(trail = false, feeling = 1, sky = Sky.SUNNY), 5).scaleName)
-        assertEquals("しっとりした短調", RunTune.plan(TuneMood(trail = true, feeling = -1, sky = Sky.RAIN), 5).scaleName)
-        assertTrue(RunTune.plan(TuneMood(trail = true), 5).scaleName.contains("森"))
-        // つらかった雨の日は、楽しかった晴れの日より遅い
-        val slow = (1L..20L).map { RunTune.plan(TuneMood(trail = false, feeling = -2, sky = Sky.RAIN), it).bpm }.average()
-        val fast = (1L..20L).map { RunTune.plan(TuneMood(trail = false, feeling = 2, sky = Sky.SUNNY, effort = 0.9), it).bpm }.average()
-        assertTrue(fast - slow > 15)
-        // 説明に、決め手が入っている
         val text = RunTune.plan(TuneMood(trail = true, feeling = 1, tempC = 4.0, sky = Sky.SUNNY), 3).description
-        assertTrue(text, text.contains("トレイル") && text.contains("楽しかった") && text.contains("晴れ") && text.contains("寒い") && text.contains("鈴"))
+        assertTrue(text, text.contains("トレイル") && text.contains("楽しかった") && text.contains("晴れ") && text.contains("寒い") && text.contains("ビブラフォン"))
     }
 
     @Test

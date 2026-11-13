@@ -404,11 +404,11 @@ object MovieMaker {
 
     private class EncodedAudio(val format: MediaFormat, val samples: List<Pair<ByteArray, MediaCodec.BufferInfo>>)
 
-    /** 曲を、動画に入れられる形（AAC）に固める */
+    /** 曲（左右2チャンネルを交互に並べたもの）を、動画に入れられる形（AAC）に固める */
     private fun encodeAac(pcm: FloatArray, rate: Int): EncodedAudio {
-        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 1).apply {
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 2).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
+            setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
         }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
@@ -429,8 +429,9 @@ object MovieMaker {
                         val buf = codec.getInputBuffer(inIndex)!!
                         buf.clear()
                         buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                        val count = minOf(buf.capacity() / 2, pcm.size - pos)
-                        val pts = pos * 1_000_000L / rate
+                        // 左右ひと組（4バイト）単位で入れる。時刻は「何組目か」から計算する
+                        val count = minOf(buf.capacity() / 4 * 2, pcm.size - pos)
+                        val pts = (pos / 2) * 1_000_000L / rate
                         if (count <= 0) {
                             codec.queueInputBuffer(inIndex, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputDone = true
