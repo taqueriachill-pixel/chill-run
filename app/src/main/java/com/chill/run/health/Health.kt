@@ -207,6 +207,20 @@ object Health {
         }.getOrNull()
     }
 
+    /** ふりかえり用：体重（kg）と体脂肪率（%）を、時刻（ミリ秒）つきで返す。読めなければ空 */
+    suspend fun readBody(context: Context, days: Long): Pair<List<Pair<Long, Double>>, List<Pair<Long, Double>>> {
+        if (!available(context)) return emptyList<Pair<Long, Double>>() to emptyList()
+        val to = Instant.now()
+        val from = to.minusSeconds(days * 86400)
+        val weight = runCatching {
+            readAll(context, WeightRecord::class, from, to).map { it.time.toEpochMilli() to it.weight.inKilograms }
+        }.getOrDefault(emptyList())
+        val fat = runCatching {
+            readAll(context, BodyFatRecord::class, from, to).map { it.time.toEpochMilli() to it.percentage.value }
+        }.getOrDefault(emptyList())
+        return weight to fat
+    }
+
     private suspend fun <T : Record> readAll(context: Context, type: KClass<T>, from: Instant, to: Instant, max: Int = 20000): List<T> {
         val out = ArrayList<T>()
         var token: String? = null

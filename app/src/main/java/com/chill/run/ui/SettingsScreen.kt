@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -33,11 +35,14 @@ import com.chill.run.core.HeartZones
 import com.chill.run.core.PhraseBook
 import com.chill.run.core.RunConfig
 import com.chill.run.core.TrackerEvent
+import com.chill.run.data.Backup
 import com.chill.run.data.PhraseStore
 import com.chill.run.data.Settings
 import com.chill.run.health.Health
 import com.chill.run.run.Speaker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
@@ -59,6 +64,30 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     var weightMessage by remember { mutableStateOf<String?>(null) }
     var customPhrases by remember { mutableStateOf(PhraseStore.isCustom(context)) }
     var videoSeconds by remember { mutableIntStateOf(settings.videoSeconds) }
+    var autoMovie by remember { mutableStateOf(settings.autoMovie) }
+    var backupMedia by remember { mutableStateOf(true) }
+    var backupBusy by remember { mutableStateOf(false) }
+    var backupMessage by remember { mutableStateOf<String?>(null) }
+    var pendingImport by remember { mutableStateOf<android.net.Uri?>(null) }
+    var restored by remember { mutableStateOf(false) }
+
+    val backupExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) {
+            backupBusy = true
+            backupMessage = "書き出しています…"
+            scope.launch {
+                val result = runCatching { withContext(Dispatchers.IO) { Backup.export(context, uri, backupMedia) } }
+                backupBusy = false
+                backupMessage = result.fold(
+                    { "書き出しました（ラン ${it.runs} 件、メモ・写真・動画 ${it.files} 個）。" },
+                    { "書き出せませんでした：${it.message}" },
+                )
+            }
+        }
+    }
+    val backupImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) pendingImport = uri
+    }
     var videoStabilize by remember { mutableStateOf(settings.videoStabilize) }
     var sayHeart by remember { mutableStateOf(settings.sayHeart) }
     var restHr by remember { mutableIntStateOf(settings.restHr) }
@@ -264,6 +293,16 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
         }
 
         Card {
+            SectionTitle("ランムービーと、隠す場所")
+            SwitchRow("走り終わったら、ランムービーを自動で作る", autoMovie) { autoMovie = it; settings.autoMovie = it }
+            Text(
+                if (settings.hideZone == null) "隠す場所：決めていません" else "隠す場所：決めてあります（半径 ${Math.round(settings.hideZone!!.radiusM)}m）",
+                color = Palette.text, fontSize = 15.sp,
+            )
+            SmallButton("隠す場所（自宅など）を決める", Modifier.fillMaxWidth()) { onNavigate("hide") }
+        }
+
+        Card {
             SectionTitle("トレイルの判定の目安")
             Text(
                 "走り終わったあと、次の2つの両方に当てはまると「トレイルに変えますか？」と聞きます。",
@@ -281,6 +320,23 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 onMinus = { trailSteep = (trailSteep - 1).coerceAtLeast(1); settings.trailSteepPercent = trailSteep },
                 onPlus = { trailSteep = (trailSteep + 1).coerceAtMost(60); settings.trailSteepPercent = trailSteep },
             )
+        }
+
+        Card {
+            SectionTitle("書き出し・読み込み（全データのバックアップ）")
+            Text(
+                "記録・設定・励ましの言葉を、1つのファイル（zip）にまとめます。機種変更のときや、もしものときのために、ときどき書き出して Google ドライブなどに置いておくと安心です。",
+                color = Palette.dim, fontSize = 13.sp,
+            )
+            SwitchRow("声のメモ・写真・動画も入れる（ファイルが大きくなります）", backupMedia) { backupMedia = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallButton(if (backupBusy) "作業中…" else "書き出す", Modifier.weight(1f), enabled = !backupBusy) {
+                    val stamp = java.time.LocalDate.now().toString()
+                    backupExport.launch("chill-run-backup-$stamp.zip")
+                }
+                SmallButton("読み込む", Modifier.weight(1f), enabled = !backupBusy) { backupImport.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }
+            }
+            backupMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
         }
 
         Card {
@@ -312,6 +368,43 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
             weightMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
         }
         Gap(24)
+    }
+
+    pendingImport?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("バックアップを読み込みますか？") },
+            text = { Text("いまこのスマホに入っている記録と設定は、すべてバックアップの中身に置きかわります。元に戻せません。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingImport = null
+                    backupBusy = true
+                    backupMessage = "読み込んでいます…"
+                    scope.launch {
+                        val result = runCatching { withContext(Dispatchers.IO) { Backup.import(context, uri) } }
+                        backupBusy = false
+                        result.onSuccess {
+                            backupMessage = "読み込みました（ラン ${it.runs} 件、メモ・写真・動画 ${it.files} 個）。"
+                            restored = true
+                        }.onFailure { backupMessage = "読み込めませんでした。いまの記録は変えていません：${it.message}" }
+                    }
+                }) { Text("置きかえる", color = Palette.danger) }
+            },
+            dismissButton = { TextButton(onClick = { pendingImport = null }) { Text("やめる") } },
+        )
+    }
+    if (restored) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("読み込みました") },
+            text = { Text("新しい中身を使うために、いったんアプリを閉じます。もう一度 Chill Run を開いてください。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    (context as? android.app.Activity)?.finishAffinity()
+                    kotlin.system.exitProcess(0)
+                }) { Text("アプリを閉じる") }
+            },
+        )
     }
 }
 

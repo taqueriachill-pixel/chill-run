@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.chill.run.ui.CheckScreen
 import com.chill.run.ui.ChillTheme
 import com.chill.run.ui.DetailScreen
+import com.chill.run.ui.HideScreen
 import com.chill.run.ui.HistoryScreen
 import com.chill.run.ui.HomeScreen
 import com.chill.run.ui.HrDeviceScreen
@@ -27,6 +28,7 @@ import com.chill.run.ui.MapSaveScreen
 import com.chill.run.ui.MusicScreen
 import com.chill.run.ui.Palette
 import com.chill.run.ui.PermissionsScreen
+import com.chill.run.ui.ReviewScreen
 import com.chill.run.ui.SettingsScreen
 
 class MainActivity : ComponentActivity() {
@@ -53,6 +55,8 @@ class MainActivity : ComponentActivity() {
                         r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
                         r == "hrdevice" -> HrDeviceScreen(onBack = { route = "settings" })
                         r == "music" -> MusicScreen(onBack = { route = "home" })
+                        r == "review" -> ReviewScreen(onBack = { route = "home" }, onOpen = { route = "detail/$it" })
+                        r == "hide" -> HideScreen(onBack = { route = "settings" })
                         r.startsWith("interval/") -> IntervalScreen(
                             menuId = r.removePrefix("interval/").toLongOrNull() ?: 0,
                             onBack = { route = "home" },
@@ -68,7 +72,7 @@ class MainActivity : ComponentActivity() {
 
     private fun parentOf(r: String) = when {
         r.startsWith("detail/") -> "history"
-        r == "mapsave" || r == "hrdevice" -> "settings"
+        r == "mapsave" || r == "hrdevice" || r == "hide" -> "settings"
         else -> "home"
     }
 

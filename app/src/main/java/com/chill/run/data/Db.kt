@@ -57,6 +57,15 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "") val hrSource: String = "",
     /** 今日のねらい："JOG"（ゆっくりジョグ）、"TEMPO"（ペース走）、なければ空 */
     @ColumnInfo(defaultValue = "") val aim: String = "",
+    // ---- ここから段階6で追加 ----
+    /** このランの中での、1km・5km・10km の最速の時間（ミリ秒）。距離が足りなければ 0 */
+    @ColumnInfo(defaultValue = "0") val best1kMs: Long = 0,
+    @ColumnInfo(defaultValue = "0") val best5kMs: Long = 0,
+    @ColumnInfo(defaultValue = "0") val best10kMs: Long = 0,
+    /** ひとことメモ */
+    @ColumnInfo(defaultValue = "") val memo: String = "",
+    /** 今日の体調（1〜5）。付けていなければ 0 */
+    @ColumnInfo(defaultValue = "0") val condition: Int = 0,
 )
 
 /** いつものコース */
@@ -147,6 +156,9 @@ data class MediaEntity(
     val textState: Int = 0,
     val durationMs: Long = 0,
 )
+
+/** ふりかえり用の、1km ごとの記録の抜き出し */
+data class HrSplit(val movingMs: Long, val avgHr: Int, val startTime: Long)
 
 /** 音楽の曲（段階5で追加） */
 @Entity(tableName = "tracks", indices = [Index(value = ["uri"], unique = true)])
@@ -243,6 +255,16 @@ interface RunDao {
     suspend fun deleteLaps(runId: Long)
 
     // ---- ここから段階5で追加 ----
+    /** ふりかえり用：心拍数の入った 1km ごとの記録を、ランの開始時刻つきで */
+    @Query("SELECT s.movingMs AS movingMs, s.avgHr AS avgHr, r.startTime AS startTime FROM splits s JOIN runs r ON r.id = s.runId WHERE s.distanceM >= 999 AND s.avgHr > 0 AND r.endTime > 0 AND r.startTime >= :since")
+    suspend fun hrSplitsSince(since: Long): List<HrSplit>
+
+    @Query("UPDATE runs SET best1kMs = :b1, best5kMs = :b5, best10kMs = :b10 WHERE id = :runId")
+    suspend fun setBests(runId: Long, b1: Long, b5: Long, b10: Long)
+
+    @Query("UPDATE runs SET memo = :memo, condition = :condition WHERE id = :runId")
+    suspend fun setMemo(runId: Long, memo: String, condition: Int)
+
     @Insert
     suspend fun insertTrack(track: TrackEntity): Long
 
@@ -326,7 +348,7 @@ suspend fun RunDao.deleteRun(runId: Long) {
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
         IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -338,7 +360,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build().also { instance = it }
         }
     }
@@ -369,5 +391,12 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
 val MIGRATION_4_5 = object : Migration(4, 5) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V4_TO_5.forEach { db.execSQL(it) }
+    }
+}
+
+/** 段階5 → 段階6 の「引っ越し」。自己ベスト用の値、ひとことメモ、今日の体調を足す */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V5_TO_6.forEach { db.execSQL(it) }
     }
 }

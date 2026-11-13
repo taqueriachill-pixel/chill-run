@@ -57,6 +57,7 @@ import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
+import com.chill.run.movie.MovieMaker
 import com.chill.run.music.MusicEngine
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -553,6 +554,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         val app = application as App
         val context = applicationContext
         val idDeferred = runId
+        val autoMovie = settings.autoMovie
         val weight = settings.weightKg.toDouble()
         val offset = if (altOffset.isNaN()) 0.0 else altOffset
         val altSource = startAltSource
@@ -599,6 +601,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
             val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
             withTimeoutOrNull(4000) { hcJob?.join() }
             RunHub.state.value = LiveState(finishedRunId = if (keep) id else -1)
+            // 設定で「自動で作る」にしてあれば、ランムービーを作っておく（数十秒かかるので、画面は先に進める）
+            if (keep && autoMovie) launch { runCatching { MovieMaker.make(context, id) } }
             delay(8000)
             sp?.shutdown()
         }

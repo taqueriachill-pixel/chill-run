@@ -86,7 +86,7 @@ private suspend fun loadPicture(file: File, video: Boolean, maxSide: Int): Image
 @Composable
 fun MediaThumb(media: MediaEntity, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
-    val isVideo = media.kind == MediaFiles.VIDEO
+    val isVideo = media.kind == MediaFiles.VIDEO || media.kind == MediaFiles.MOVIE
     val image by produceState<ImageBitmap?>(null, media.id) {
         value = loadPicture(MediaFiles.file(context, media.file), isVideo, 400)
     }
@@ -111,9 +111,9 @@ fun MediaViewer(media: MediaEntity, onClose: () -> Unit, onDelete: () -> Unit) {
     var confirm by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(whereWhen(media), color = Color.White, fontSize = 15.sp)
+            Text(if (media.kind == MediaFiles.MOVIE) "今日のランムービー" else whereWhen(media), color = Color.White, fontSize = 15.sp)
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                if (media.kind == MediaFiles.VIDEO) {
+                if (media.kind == MediaFiles.VIDEO || media.kind == MediaFiles.MOVIE) {
                     AndroidView(
                         factory = { ctx ->
                             VideoView(ctx).apply {

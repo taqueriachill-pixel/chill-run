@@ -51,4 +51,15 @@ object MigrationSql {
         "CREATE TABLE IF NOT EXISTS `tracks` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `uri` TEXT NOT NULL, `title` TEXT NOT NULL, `artist` TEXT NOT NULL, `durationMs` INTEGER NOT NULL, `bpm` REAL NOT NULL, `bpmManual` INTEGER NOT NULL, `bpmState` INTEGER NOT NULL, `enabled` INTEGER NOT NULL)",
         "CREATE UNIQUE INDEX IF NOT EXISTS `index_tracks_uri` ON `tracks` (`uri`)",
     )
+
+    /** 段階5 までの runs 表にある項目 */
+    val RUNS_V5_COLUMNS = RUNS_V2_COLUMNS + setOf("avgHr", "maxHr", "hrSource", "aim")
+
+    val V5_TO_6 = listOf(
+        "ALTER TABLE `runs` ADD COLUMN `best1kMs` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `runs` ADD COLUMN `best5kMs` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `runs` ADD COLUMN `best10kMs` INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE `runs` ADD COLUMN `memo` TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE `runs` ADD COLUMN `condition` INTEGER NOT NULL DEFAULT 0",
+    )
 }

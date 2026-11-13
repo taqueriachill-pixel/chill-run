@@ -49,6 +49,7 @@ import com.chill.run.data.Settings
 import com.chill.run.data.SplitEntity
 import com.chill.run.data.deleteRun
 import com.chill.run.health.Health
+import com.chill.run.movie.MovieMaker
 import com.chill.run.speech.Transcriber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -95,8 +96,23 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
     var declinedMax by remember { mutableIntStateOf(settings.maxHrDeclined) }
     var hrImportMessage by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<MediaEntity?>(null) }
+    var movieProgress by remember { mutableStateOf<Int?>(null) }
+    var movieMessage by remember { mutableStateOf<String?>(null) }
+    var editingMemo by remember { mutableStateOf(false) }
     var busyMemo by remember { mutableStateOf(0L) }
     var memoMessage by remember { mutableStateOf<String?>(null) }
+
+    var makeMovie by remember { mutableStateOf(false) }
+    LaunchedEffect(makeMovie) {
+        if (!makeMovie) return@LaunchedEffect
+        movieMessage = null
+        movieProgress = 0
+        val result = MovieMaker.make(context, runId) { movieProgress = it }
+        movieProgress = null
+        makeMovie = false
+        movieMessage = result.fold({ "できました。「見る・共有する」から、写真フォルダや SNS に出せます。" }, { "作れませんでした：${it.message}" })
+        reload++
+    }
 
     // まだ文字にしていない声のメモを、1つずつ文字にする（走り終わってからまとめて）
     val pendingMemos = data?.media?.count { it.kind == MediaFiles.MEMO && it.textState == 0 } ?: 0
@@ -308,9 +324,58 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             }
         }
 
+        // ひとことメモと、今日の体調（任意）
+        Card {
+            SectionTitle("今日の体調（任意）")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("つらい", "重い", "ふつう", "良い", "絶好調").forEachIndexed { i, label ->
+                    Chip(label, r.condition == i + 1, Modifier.weight(1f), color = color) {
+                        scope.launch {
+                            // もう一度押すと、付けていない状態に戻る
+                            withContext(Dispatchers.IO) { dao.setMemo(r.id, r.memo, if (r.condition == i + 1) 0 else i + 1) }
+                            reload++
+                        }
+                    }
+                }
+            }
+            SectionTitle("ひとことメモ")
+            Text(r.memo.ifBlank { "（まだ書いていません）" }, color = if (r.memo.isBlank()) Palette.dim else Palette.text, fontSize = 16.sp)
+            SmallButton(if (r.memo.isBlank()) "メモを書く" else "メモを直す", Modifier.fillMaxWidth()) { editingMemo = true }
+        }
+
+        // 10秒の「今日のランムービー」
+        if (points.size >= 2) {
+            val movie = d.media.lastOrNull { it.kind == MediaFiles.MOVIE }
+            Card {
+                SectionTitle("今日のランムービー（約10秒・縦長・音なし）")
+                val progress = movieProgress
+                if (progress != null) {
+                    Text("作っています… $progress %（30秒〜1分ほどかかります。この画面を開いたままにしてください）", color = Palette.warn, fontSize = 15.sp)
+                } else {
+                    if (movie != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            MediaThumb(movie, Modifier.weight(0.6f)) { viewing = movie }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SmallButton("見る・共有する", Modifier.fillMaxWidth()) { viewing = movie }
+                                SmallButton("作り直す", Modifier.fillMaxWidth()) { makeMovie = true }
+                            }
+                        }
+                    } else {
+                        BigButton("ランムービーを作る", Modifier.fillMaxWidth(), color = color) { makeMovie = true }
+                    }
+                    Text(
+                        "地図の上にルートが描かれ、写真・動画（最大4つ）と数字が続きます。" +
+                            (if (settings.hideZone != null) "隠す場所の近くのルートは描きません。" else "自宅のまわりを描きたくないときは、設定の「隠す場所」で決められます。"),
+                        color = Palette.dim, fontSize = 13.sp,
+                    )
+                }
+                movieMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
+            }
+        }
+
         // 走りながら残したもの
         val memos = d.media.filter { it.kind == MediaFiles.MEMO }
-        val pictures = d.media.filter { it.kind != MediaFiles.MEMO }
+        val pictures = d.media.filter { it.kind == MediaFiles.PHOTO || it.kind == MediaFiles.VIDEO }
         if (memos.isNotEmpty()) {
             Card {
                 SectionTitle("声のメモ")
@@ -481,6 +546,26 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 },
             )
         }
+    }
+
+    val currentRun = data?.run
+    if (editingMemo && currentRun != null) {
+        var text by remember(currentRun.id) { mutableStateOf(currentRun.memo) }
+        AlertDialog(
+            onDismissRequest = { editingMemo = false },
+            title = { Text("ひとことメモ") },
+            text = { OutlinedTextField(value = text, onValueChange = { text = it.take(500) }, minLines = 3, label = { Text("今日のランはどうだった？") }) },
+            confirmButton = {
+                TextButton(onClick = {
+                    editingMemo = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) { dao.setMemo(currentRun.id, text.trim(), currentRun.condition) }
+                        reload++
+                    }
+                }) { Text("決定") }
+            },
+            dismissButton = { TextButton(onClick = { editingMemo = false }) { Text("やめる") } },
+        )
     }
 
     val course = data?.course

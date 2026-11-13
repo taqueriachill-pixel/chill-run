@@ -629,4 +629,101 @@ class CoreTest {
         assertTrue(flat.learned)
         assertEquals(160.0, flat.cadenceFor(400.0), 0.5)
     }
+
+    // ---- 段階6 ----
+
+    @Test
+    fun fastest_segment() {
+        // 3km：1km 目は 6分、2km 目は 5分、3km 目は 7分（10m ごとの地点）
+        val n = 301
+        val dist = DoubleArray(n) { it * 10.0 }
+        val ms = LongArray(n)
+        for (i in 1 until n) ms[i] = ms[i - 1] + when { i <= 100 -> 3600L; i <= 200 -> 3000L; else -> 4200L }
+        assertEquals(300_000L, Bests.fastest(dist, ms, 1000.0))
+        assertEquals(1_080_000L, Bests.fastest(dist, ms, 3000.0))
+        assertEquals(null, Bests.fastest(dist, ms, 5000.0))
+        // 地点がまばらでも、あいだを補って出せる（100m を 30秒、の等速）
+        val d2 = doubleArrayOf(0.0, 700.0, 1400.0, 2100.0)
+        val m2 = longArrayOf(0, 210_000, 420_000, 630_000)
+        assertEquals(300_000L, Bests.fastest(d2, m2, 1000.0))
+    }
+
+    @Test
+    fun seven_day_average_smooths_daily_noise() {
+        // 毎日 ±1kg ゆれるが、平均は 70kg
+        val daily = (0L until 14).map { it to (70.0 + if (it % 2 == 0L) 1.0 else -1.0) }
+        val avg = Review.sevenDayAverage(daily)
+        assertEquals(14, avg.size)
+        assertEquals(71.0, avg[0].second, 1e-9)          // 初日はその日だけ
+        assertTrue(Math.abs(avg[13].second - 70.0) < 0.2) // 7日ぶんそろえば、ほぼ 70
+        // 同じ日に2回測っていたら、先に平均する
+        val twice = Review.sevenDayAverage(listOf(5L to 60.0, 5L to 62.0))
+        assertEquals(61.0, twice.single().second, 1e-9)
+        // 測っていない日があっても、ある日だけで平均する
+        val gaps = Review.sevenDayAverage(listOf(0L to 70.0, 10L to 68.0))
+        assertEquals(68.0, gaps[1].second, 1e-9)
+    }
+
+    @Test
+    fun same_pace_heart_rate_comparison() {
+        // 6分30秒/km 前後（390秒）の区間が、今月は平均 148、先月は平均 152
+        val now = listOf(385.0 to 147, 392.0 to 149, 398.0 to 148, 330.0 to 165)
+        val last = listOf(388.0 to 152, 395.0 to 153, 381.0 to 151, 450.0 to 135)
+        val r = Review.samePaceHr(now, last)!!
+        assertEquals(390, r.paceSecPerKm)
+        assertEquals(3, r.thisCount)
+        assertEquals(3, r.lastCount)
+        assertEquals(148, r.thisAvg)
+        assertEquals(152, r.lastAvg)
+        assertEquals(-4, r.diff)
+        assertTrue(r.diff < 0)
+        // 片方の月にしかないペースでは比べない
+        assertEquals(null, Review.samePaceHr(listOf(300.0 to 160, 305.0 to 161), listOf(450.0 to 130, 455.0 to 131)))
+        // 心拍数が取れていない区間（0）は使わない
+        assertEquals(null, Review.samePaceHr(listOf(390.0 to 0, 391.0 to 0), listOf(390.0 to 150, 391.0 to 150)))
+    }
+
+    @Test
+    fun cheer_praises_continuing_not_numbers() {
+        assertTrue(Review.cheer(8, 1).contains("今月は8回走った"))
+        assertTrue(Review.cheer(0, 0).isNotEmpty())
+        assertTrue(Review.cheer(5, 3).contains("今週は3回"))
+    }
+
+    @Test
+    fun hide_zone() {
+        val home = HideZone(35.6000, 139.5400, 200.0)
+        assertTrue(home.hides(35.6010, 139.5400))   // 約111m
+        assertFalse(home.hides(35.6030, 139.5400))  // 約334m
+    }
+
+    @Test
+    fun yuv_conversion_of_known_colors() {
+        val w = 4; val h = 2
+        val px = IntArray(w * h)
+        px[0] = 0xFFFFFFFF.toInt(); px[1] = 0xFF000000.toInt(); px[2] = 0xFFFF0000.toInt(); px[3] = 0xFF0000FF.toInt()
+        val y = ByteArray(w * h); val u = ByteArray(2); val v = ByteArray(2)
+        Yuv.fromArgb(px, w, h, y, u, v)
+        fun b(x: Byte) = x.toInt() and 0xFF
+        assertEquals(235, b(y[0]))  // 白
+        assertEquals(16, b(y[1]))   // 黒
+        assertEquals(82.0, b(y[2]).toDouble(), 2.0) // 赤
+        assertEquals(128, b(u[0])); assertEquals(128, b(v[0])) // 白は色みなし
+        assertEquals(240.0, b(v[1]).toDouble(), 2.0)             // 赤は V が高い
+    }
+
+    @Test
+    fun movie_timeline() {
+        assertEquals(MovieScript.Scene.TITLE, MovieScript.sceneAt(0.5, 2))
+        assertEquals(MovieScript.Scene.MAP, MovieScript.sceneAt(3.0, 2))
+        assertEquals(MovieScript.Scene.MEDIA, MovieScript.sceneAt(6.0, 2))
+        assertEquals(MovieScript.Scene.STATS, MovieScript.sceneAt(9.0, 2))
+        // 写真・動画がない日は、地図を 8.5秒まで
+        assertEquals(MovieScript.Scene.MAP, MovieScript.sceneAt(6.0, 0))
+        assertEquals(0.0, MovieScript.routeProgress(1.5, 2), 1e-9)
+        assertEquals(1.0, MovieScript.routeProgress(4.7, 2), 1e-9)
+        assertEquals(0, MovieScript.mediaSlot(5.1, 4).first)
+        assertEquals(3, MovieScript.mediaSlot(8.4, 4).first)
+        assertEquals(0, MovieScript.mediaSlot(8.4, 1).first)
+    }
 }

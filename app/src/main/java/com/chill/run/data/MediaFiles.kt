@@ -11,6 +11,8 @@ object MediaFiles {
     const val MEMO = "MEMO"
     const val PHOTO = "PHOTO"
     const val VIDEO = "VIDEO"
+    /** 今日のランムービー */
+    const val MOVIE = "MOVIE"
 
     private fun root(context: Context) = File(context.filesDir, "media")
 

@@ -217,6 +217,9 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SmallButton("記録の一覧", Modifier.weight(1f)) { onNavigate("history") }
+            SmallButton("ふりかえり", Modifier.weight(1f)) { onNavigate("review") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SmallButton("設定", Modifier.weight(1f)) { onNavigate("settings") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

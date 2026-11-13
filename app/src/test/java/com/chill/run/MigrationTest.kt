@@ -17,17 +17,17 @@ import java.io.File
  * 版を上げるときは、下の4か所（版の番号、命令、新しい表、前の版の項目の数）を書きかえる。
  */
 class MigrationTest {
-    private val version = 5
-    private val statements = MigrationSql.V4_TO_5
-    private val newTables = setOf("tracks")
+    private val version = 6
+    private val statements = MigrationSql.V5_TO_6
+    private val newTables = emptySet<String>()
 
-    /** 前の版（4）の、表ごとの項目の数。項目を足したのに引っ越しを書き忘れると、ここで気づける */
+    /** 前の版（5）の、今回は形を変えていない表の項目の数。項目を足したのに引っ越しを書き忘れると、ここで気づける */
     private val before = mapOf(
-        "runs" to 25, "points" to 11, "splits" to 9, "courses" to 4, "laps" to 7, "interval_menus" to 8, "media" to 11,
+        "points" to 11, "splits" to 9, "courses" to 4, "laps" to 7, "interval_menus" to 8, "media" to 11, "tracks" to 9,
     )
 
-    /** 今回、項目を足した表と、前の版にあった項目（今回はなし） */
-    private val altered = emptyMap<String, Set<String>>()
+    /** 今回、項目を足した表と、前の版にあった項目 */
+    private val altered = mapOf("runs" to MigrationSql.RUNS_V5_COLUMNS)
 
     private fun currentSchema(): JSONObject {
         val dir = listOf("schemas", "app/schemas").map { File(it, "com.chill.run.data.AppDb") }.first { it.exists() }
@@ -80,6 +80,21 @@ class MigrationTest {
             }
         }
         assertEquals("設計図にない命令が、引っ越しに入っています", wanted, used)
-        assertEquals(before.size + newTables.size, entities.length())
+        assertEquals(before.size + newTables.size + altered.size, entities.length())
+    }
+
+    /** バックアップが、いまの表を1つも取りこぼしていないか */
+    @Test
+    fun backup_covers_every_table() {
+        val db = currentSchema()
+        val entities = db.getJSONArray("entities")
+        val tables = (0 until entities.length()).map { entities.getJSONObject(it).getString("tableName") }.toSet()
+        val source = listOf("src/main/java/com/chill/run/data/Backup.kt", "app/src/main/java/com/chill/run/data/Backup.kt")
+            .map(::File).first { it.exists() }.readText()
+        val listed = Regex("TABLES = listOf\\(([^)]*)\\)").find(source)!!.groupValues[1]
+            .split(',').map { it.trim().trim('"') }.filter { it.isNotEmpty() }.toSet()
+        assertEquals("バックアップの表の一覧（Backup.TABLES）を、いまの表に合わせてください", tables, listed)
+        val backupVersion = Regex("DB_VERSION = (\\d+)").find(source)!!.groupValues[1].toInt()
+        assertEquals("Backup.DB_VERSION を、データベースの版に合わせてください", db.getInt("version"), backupVersion)
     }
 }

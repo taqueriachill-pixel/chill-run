@@ -1,6 +1,7 @@
 package com.chill.run.data
 
 import android.content.Context
+import com.chill.run.core.Bests
 import com.chill.run.core.RouteAnalysis
 
 /**
@@ -67,13 +68,30 @@ object PostRun {
             run.copy(typeSuggestion = suggestion)
         }
         dao.updateRun(run)
+        bests(context, runId, points)
+    }
+
+    /** このランの中での、1km・5km・10km の最速を調べて保存する（自己ベスト用） */
+    suspend fun bests(context: Context, runId: Long, loaded: List<PointEntity>? = null) {
+        val dao = AppDb.get(context).runDao()
+        val points = loaded ?: dao.points(runId)
+        if (points.size < 2) return
+        val dist = DoubleArray(points.size) { points[it].distM }
+        val ms = LongArray(points.size) { points[it].movingMs }
+        dao.setBests(
+            runId,
+            Bests.fastest(dist, ms, 1000.0) ?: 0,
+            Bests.fastest(dist, ms, 5000.0) ?: 0,
+            Bests.fastest(dist, ms, 10000.0) ?: 0,
+        )
     }
 
     /** 段階1 のころの記録など、まだ調べていないランをまとめて調べる（古い順） */
     suspend fun backfill(context: Context) {
         val dao = AppDb.get(context).runDao()
-        dao.finishedRuns().filter { it.shape.isEmpty() }.sortedBy { it.startTime }.forEach {
-            runCatching { analyze(context, it.id) }
-        }
+        val runs = dao.finishedRuns().sortedBy { it.startTime }
+        runs.filter { it.shape.isEmpty() }.forEach { runCatching { analyze(context, it.id) } }
+        // 段階6 より前に記録したランの、1km などの最速を調べる
+        runs.filter { it.shape.isNotEmpty() && it.best1kMs == 0L && it.distanceM >= 1000 }.forEach { runCatching { bests(context, it.id) } }
     }
 }

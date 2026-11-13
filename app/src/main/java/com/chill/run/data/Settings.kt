@@ -6,6 +6,7 @@ import com.chill.run.core.AnnounceOptions
 import com.chill.run.core.AnnounceUnit
 import com.chill.run.core.GoalKind
 import com.chill.run.core.HeartRate
+import com.chill.run.core.HideZone
 import com.chill.run.core.IntervalPlan
 import com.chill.run.core.RunConfig
 import com.chill.run.core.RunType
@@ -91,6 +92,25 @@ class Settings(context: Context) {
     var videoStabilize: Boolean
         get() = p.getBoolean("videoStabilize", true)
         set(v) = p.edit().putBoolean("videoStabilize", v).apply()
+
+    // ---- ランムービーと、隠す場所 ----
+    /** 走り終わったら、ランムービーを自動で作るか */
+    var autoMovie: Boolean
+        get() = p.getBoolean("autoMovie", false)
+        set(v) = p.edit().putBoolean("autoMovie", v).apply()
+
+    /** 隠す場所（自宅など）。決めていなければ null */
+    var hideZone: HideZone?
+        get() {
+            val lat = p.getString("hideLat", null)?.toDoubleOrNull() ?: return null
+            val lon = p.getString("hideLon", null)?.toDoubleOrNull() ?: return null
+            return HideZone(lat, lon, p.getInt("hideRadius", 200).toDouble())
+        }
+        set(v) {
+            if (v == null) p.edit().remove("hideLat").remove("hideLon").apply()
+            else p.edit().putString("hideLat", v.lat.toString()).putString("hideLon", v.lon.toString())
+                .putInt("hideRadius", Math.round(v.radiusM).toInt()).apply()
+        }
 
     // ---- 音楽 ----
     /** 曲のフォルダ。選んでいなければ空 */
