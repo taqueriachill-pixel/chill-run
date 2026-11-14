@@ -322,10 +322,59 @@ class CoreTest {
         val alt = DoubleArray(201) { i -> when { i <= 100 -> 20.0; i <= 150 -> 20.0 + (i - 100) * 1.2; else -> 80.0 } }
         val steep = RouteAnalysis.steepFraction(dist, alt)
         assertEquals(0.25, steep, 0.03)
-        assertTrue(RouteAnalysis.looksLikeTrail(2000.0, 60.0, steep, 15.0, 10.0))
-        assertFalse(RouteAnalysis.looksLikeTrail(2000.0, 10.0, 0.0, 15.0, 10.0))
+        fun judge(gain: Double, steepF: Double?, unpaved: Double?) = RouteAnalysis.looksLikeTrail(2000.0, gain, steepF, unpaved, 15.0, 10.0, 30.0)
+        // 道の種類が分からないとき：登りと坂の両方
+        assertEquals(true, judge(60.0, steep, null))
+        assertEquals(false, judge(10.0, 0.0, null))
         // 登りは多いが坂が短い（ゆるい長い登り）はトレイルにしない
-        assertFalse(RouteAnalysis.looksLikeTrail(2000.0, 60.0, 0.02, 15.0, 10.0))
+        assertEquals(false, judge(60.0, 0.02, null))
+        // 3つのうち2つ：ゆるい長い登りでも、土の道が多ければトレイル
+        assertEquals(true, judge(60.0, 0.02, 0.7))
+        // 平らな土の道（河川敷など）は、未舗装だけなのでトレイルにしない
+        assertEquals(false, judge(5.0, 0.0, 0.9))
+        // 登りと坂があれば、舗装路でもトレイルの候補（2つ当てはまる）
+        assertEquals(true, judge(60.0, steep, 0.0))
+        // 高さが分からないときは、道の種類だけで決める。どちらも分からなければ決めない
+        assertEquals(true, judge(0.0, null, 0.6))
+        assertEquals(null, judge(0.0, null, null))
+    }
+
+    @Test
+    fun playlist_m3u_is_matched_to_library() {
+        val text = "\uFEFF#EXTM3U\n#EXTINF:215,Artist - Song\n/storage/emulated/0/Music/Album A/01 Song.mp3\n\n" +
+            "..\\Album B\\02 other.flac\nfile:///storage/emulated/0/Music/%E6%9B%B2.m4a\nmissing.mp3\n"
+        val entries = Playlist.parseM3u(text)
+        assertEquals(listOf("/storage/emulated/0/Music/Album A/01 Song.mp3", "../Album B/02 other.flac", "/storage/emulated/0/Music/曲.m4a", "missing.mp3"), entries)
+        val library = listOf(
+            "primary:Music/Album B/01 Song.mp3", // 同じファイル名だが、別のアルバム
+            "primary:Music/Album A/01 Song.mp3",
+            "primary:Music/Album B/02 Other.flac", // 大文字・小文字の違いは気にしない
+            "primary:Music/曲.m4a",
+        )
+        assertEquals(listOf(1, 2, 3, null), Playlist.match(entries, library))
+    }
+
+    @Test
+    fun unpaved_fraction_from_osm_ways() {
+        assertEquals(true, Surface.isUnpaved(mapOf("highway" to "path")))
+        assertEquals(false, Surface.isUnpaved(mapOf("highway" to "path", "surface" to "asphalt")))
+        assertEquals(true, Surface.isUnpaved(mapOf("highway" to "footway", "surface" to "dirt")))
+        assertEquals(false, Surface.isUnpaved(mapOf("highway" to "footway")))
+        assertEquals(true, Surface.isUnpaved(mapOf("highway" to "track")))
+        assertEquals(false, Surface.isUnpaved(mapOf("highway" to "track", "tracktype" to "grade1")))
+        assertEquals(true, Surface.isUnpaved(mapOf("highway" to "footway", "sac_scale" to "hiking")))
+        assertEquals(null, Surface.isUnpaved(mapOf("highway" to "steps")))
+        assertEquals(false, Surface.isUnpaved(mapOf("highway" to "residential")))
+
+        // 東西にのびる舗装路と、その北 100m を並行する山道。ルートは前半を舗装路、後半を山道の上を通る
+        val road = OsmWay(mapOf("highway" to "residential"), line(35.6000, 139.5000, 35.6000, 139.5200, 5))
+        val path = OsmWay(mapOf("highway" to "path"), line(35.6009, 139.5000, 35.6009, 139.5200, 5))
+        val route = line(35.60002, 139.5010, 35.60002, 139.5100, 10) + line(35.60088, 139.5100, 35.60088, 139.5190, 10)
+        assertEquals(0.5, Surface.unpavedFraction(route, listOf(road, path))!!, 0.06)
+        // 地図に道がない所ばかりなら、決めない
+        assertEquals(null, Surface.unpavedFraction(line(35.70, 139.60, 35.71, 139.61, 10), listOf(road, path)))
+        // 線分までの距離
+        assertEquals(100.0, Surface.distanceToSegmentM(LatLon(35.6009, 139.51), LatLon(35.6, 139.50), LatLon(35.6, 139.52)), 2.0)
     }
 
     private fun line(lat0: Double, lon0: Double, lat1: Double, lon1: Double, n: Int = 100): List<LatLon> =

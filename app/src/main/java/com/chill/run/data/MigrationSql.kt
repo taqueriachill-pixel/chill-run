@@ -71,4 +71,11 @@ object MigrationSql {
         "ALTER TABLE `runs` ADD COLUMN `weatherCode` INTEGER NOT NULL DEFAULT -1",
         "ALTER TABLE `runs` ADD COLUMN `weatherManual` INTEGER NOT NULL DEFAULT 0",
     )
+
+    /** 版7 までの runs 表にある項目 */
+    val RUNS_V7_COLUMNS = RUNS_V6_COLUMNS + setOf("tempC", "weatherCode", "weatherManual")
+
+    val V7_TO_8 = listOf(
+        "ALTER TABLE `runs` ADD COLUMN `unpavedFraction` REAL",
+    )
 }

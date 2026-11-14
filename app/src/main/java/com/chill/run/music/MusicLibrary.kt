@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.chill.run.App
 import com.chill.run.core.BpmDetector
+import com.chill.run.core.Playlist
 import com.chill.run.data.AppDb
 import com.chill.run.data.TrackEntity
 import kotlinx.coroutines.Dispatchers
@@ -102,5 +103,36 @@ object MusicLibrary {
                 status.value = null
             }
         }
+    }
+
+    class PlaylistResult(val listed: Int, val found: Int)
+
+    /**
+     * プレイリスト（m3u・m3u8）を読んで、そこに入っている曲だけを「ランで使う」にする（ほかの曲はオフ）。
+     * 曲そのものは、選んである曲のフォルダの中から探す。
+     */
+    suspend fun applyPlaylist(context: Context, playlist: Uri): PlaylistResult = withContext(Dispatchers.IO) {
+        val bytes = context.contentResolver.openInputStream(playlist)?.use { it.readBytes() } ?: error("ファイルを開けませんでした")
+        // m3u8 は UTF-8。古い m3u は、日本語だと Shift_JIS のことがある
+        var text = String(bytes, Charsets.UTF_8)
+        if ('\uFFFD' in text) text = runCatching { String(bytes, charset("MS932")) }.getOrDefault(text)
+        val entries = Playlist.parseM3u(text)
+        val dao = AppDb.get(context).runDao()
+        val tracks = dao.tracks()
+        val paths = tracks.map { t -> runCatching { DocumentsContract.getDocumentId(Uri.parse(t.uri)) }.getOrDefault(t.uri) }
+        val matched = Playlist.match(entries, paths).filterNotNull().toSet()
+        if (matched.isNotEmpty()) {
+            tracks.forEachIndexed { i, t ->
+                val use = i in matched
+                if (t.enabled != use) dao.updateTrack(t.copy(enabled = use))
+            }
+        }
+        PlaylistResult(entries.size, matched.size)
+    }
+
+    /** プレイリストをやめて、全部の曲を「ランで使う」に戻す */
+    suspend fun useAllTracks(context: Context) = withContext(Dispatchers.IO) {
+        val dao = AppDb.get(context).runDao()
+        dao.tracks().filter { !it.enabled }.forEach { dao.updateTrack(it.copy(enabled = true)) }
     }
 }

@@ -88,6 +88,26 @@ fun MusicScreen(onBack: () -> Unit) {
         }
     }
 
+    var playlist by remember { mutableStateOf(settings.playlistName) }
+    var playlistMessage by remember { mutableStateOf<String?>(null) }
+    val playlistLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            playlistMessage = "読み込んでいます…"
+            val result = runCatching { MusicLibrary.applyPlaylist(context, uri) }
+                .getOrElse { playlistMessage = "読み込めませんでした：${it.message}"; return@launch }
+            val name = Uri.decode(uri.toString()).substringAfterLast('/').substringAfterLast(':')
+            if (result.found == 0) {
+                playlistMessage = "プレイリストの ${result.listed} 曲が、曲のフォルダの中に1曲も見つかりませんでした。" +
+                    "プレイリストの曲が、上で選んだフォルダに入っているか確かめてください。曲の設定は変えていません。"
+            } else {
+                settings.playlistName = name
+                playlist = name
+                playlistMessage = "プレイリストの ${result.listed} 曲のうち、${result.found} 曲が見つかりました。この ${result.found} 曲だけを使います。" +
+                    if (result.found < result.listed) "（見つからなかった曲は、曲のフォルダに入っていないか、名前が違います）" else ""
+            }
+        }
+    }
+
     val known = tracks.count { it.bpm > 0 }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScreenHeader("音楽", onBack)
@@ -106,6 +126,29 @@ fun MusicScreen(onBack: () -> Unit) {
             Text("全部で ${tracks.size} 曲、BPM が分かっている曲 $known 曲", color = Palette.dim, fontSize = 13.sp)
             (status ?: message)?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
             Text("※ Spotify などの配信の曲は使えません（ほかのアプリの音は速さを変えられないため）。", color = Palette.dim, fontSize = 12.sp)
+        }
+
+        if (tracks.isNotEmpty()) Card {
+            SectionTitle("プレイリスト（使う曲をしぼる）")
+            Text(
+                if (playlist.isEmpty()) "いまは、フォルダの曲を全部使います（下の一覧でオフにした曲を除く）。プレイリスト（m3u・m3u8 のファイル）を読み込むと、そこに入っている曲だけを使います。"
+                else "いまは、プレイリスト「$playlist」の曲だけを使っています（${tracks.count { it.enabled }} 曲）。",
+                color = Palette.text, fontSize = 15.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SmallButton(if (playlist.isEmpty()) "プレイリストを読み込む" else "別のプレイリスト", Modifier.weight(1f)) {
+                    playlistLauncher.launch(arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/octet-stream", "text/plain", "*/*"))
+                }
+                if (playlist.isNotEmpty()) SmallButton("全部の曲に戻す", Modifier.weight(1f)) {
+                    scope.launch {
+                        MusicLibrary.useAllTracks(context)
+                        settings.playlistName = ""
+                        playlist = ""
+                        playlistMessage = "全部の曲を使うように戻しました。"
+                    }
+                }
+            }
+            playlistMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
         }
 
         Card {

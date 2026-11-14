@@ -113,6 +113,8 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     }
     var trailGain by remember { mutableIntStateOf(settings.trailGainPerKm) }
     var trailSteep by remember { mutableIntStateOf(settings.trailSteepPercent) }
+    var trailUnpaved by remember { mutableIntStateOf(settings.trailUnpavedPercent) }
+    var osmSurface by remember { mutableStateOf(settings.osmSurface) }
 
     val speaker = remember { Speaker(context, settings.ttsRate, settings.ttsVolume) }
     DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
@@ -311,7 +313,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
         Card {
             SectionTitle("トレイルの判定の目安")
             Text(
-                "走り終わったあと、次の2つの両方に当てはまると「トレイルに変えますか？」と聞きます。",
+                "走り終わったあと、次の3つのうち2つに当てはまると「トレイルに変えますか？」と聞きます（道の種類が分からないときは、上の2つの両方）。",
                 color = Palette.dim, fontSize = 13.sp,
             )
             Text("1km あたりの登り", color = Palette.dim, fontSize = 13.sp)
@@ -325,6 +327,17 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 "$trailSteep % 以上",
                 onMinus = { trailSteep = (trailSteep - 1).coerceAtLeast(1); settings.trailSteepPercent = trailSteep },
                 onPlus = { trailSteep = (trailSteep + 1).coerceAtMost(60); settings.trailSteepPercent = trailSteep },
+            )
+            Text("未舗装の道・登山道・遊歩道を通った割合", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "$trailUnpaved % 以上",
+                onMinus = { trailUnpaved = (trailUnpaved - 5).coerceAtLeast(5); settings.trailUnpavedPercent = trailUnpaved },
+                onPlus = { trailUnpaved = (trailUnpaved + 5).coerceAtMost(95); settings.trailUnpavedPercent = trailUnpaved },
+            )
+            SwitchRow("地図（OpenStreetMap）で道の種類を調べる", osmSurface) { osmSurface = it; settings.osmSurface = it }
+            Text(
+                "走り終わったあと、ルートの点（隠す場所のまわりは除く）を Overpass API に送って、まわりの道の種類と路面を調べます。",
+                color = Palette.dim, fontSize = 12.sp,
             )
         }
 

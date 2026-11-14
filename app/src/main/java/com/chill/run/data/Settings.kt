@@ -83,6 +83,21 @@ class Settings(context: Context) {
         get() = p.getInt("trailSteepPercent", 10)
         set(v) = p.edit().putInt("trailSteepPercent", v).apply()
 
+    /** 未舗装の道を通った割合が、これ以上ならトレイルの目安に当てはまる（%） */
+    var trailUnpavedPercent: Int
+        get() = p.getInt("trailUnpavedPercent", 30)
+        set(v) = p.edit().putInt("trailUnpavedPercent", v).apply()
+
+    /** 読み込んだプレイリストの名前。使っていなければ空 */
+    var playlistName: String
+        get() = p.getString("playlistName", "") ?: ""
+        set(v) = p.edit().putString("playlistName", v).apply()
+
+    /** 走り終わったあと、地図（OpenStreetMap）で道の種類を調べるか */
+    var osmSurface: Boolean
+        get() = p.getBoolean("osmSurface", true)
+        set(v) = p.edit().putBoolean("osmSurface", v).apply()
+
     /** 動画の長さ（秒） */
     var videoSeconds: Int
         get() = p.getInt("videoSeconds", 4)

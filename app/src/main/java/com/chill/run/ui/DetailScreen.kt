@@ -1,5 +1,8 @@
 package com.chill.run.ui
 
+import kotlinx.coroutines.delay
+import com.chill.run.data.PostRun
+import com.chill.run.core.RouteAnalysis
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -66,7 +69,16 @@ private class DetailData(
     val course: CourseEntity?,
     val courseRuns: List<RunEntity>,
     val media: List<MediaEntity>,
+    /** 急な坂を通った割合（%）。高さが分からなければ null */
+    val steepPercent: Int? = null,
 )
+
+private fun steepPercentOf(points: List<PointEntity>): Int? {
+    if (points.size < 2 || points.count { it.alt != null } < points.size / 2) return null
+    var lastAlt = points.firstNotNullOfOrNull { it.alt } ?: 0.0
+    val alt = DoubleArray(points.size) { i -> points[i].alt?.let { lastAlt = it }; lastAlt }
+    return Math.round(RouteAnalysis.steepFraction(DoubleArray(points.size) { points[it].distM }, alt) * 100).toInt()
+}
 
 @Composable
 fun DetailScreen(runId: Long, onBack: () -> Unit) {
@@ -91,6 +103,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 course = course,
                 courseRuns = if (course != null) dao.runsOfCourse(course.id) else emptyList(),
                 media = dao.media(runId),
+                steepPercent = steepPercentOf(dao.points(runId)),
             )
         }
     }
@@ -104,6 +117,16 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
     var editingMemo by remember { mutableStateOf(false) }
     var busyMemo by remember { mutableStateOf(0L) }
     var memoMessage by remember { mutableStateOf<String?>(null) }
+
+    // まだ道の種類を調べていなければ、ここで調べる（走り終わったときに通信できなかった場合など）
+    LaunchedEffect(runId) {
+        delay(1500)
+        val done = withContext(Dispatchers.IO) { runCatching { PostRun.checkSurface(context, runId) }.getOrDefault(false) }
+        if (done) reload++
+    }
+
+    var exportingMap by remember { mutableStateOf(false) }
+    var mapMessage by remember { mutableStateOf<String?>(null) }
 
     var makeMovie by remember { mutableStateOf(false) }
     LaunchedEffect(makeMovie) {
@@ -183,7 +206,8 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             val toTrail = r.typeSuggestion == "TRAIL"
             Card {
                 Text(
-                    if (toTrail) "登りや坂が多いランでした。トレイルに変えますか？" else "登りや坂が少ないランでした。ロードに変えますか？",
+                    if (toTrail) "登り・坂・未舗装の道の目安から見ると、トレイルらしいランでした。トレイルに変えますか？"
+                    else "登り・坂・未舗装の道の目安から見ると、ロードらしいランでした。ロードに変えますか？",
                     color = Palette.text, fontSize = 16.sp, fontWeight = FontWeight.Bold,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -207,6 +231,13 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 Stat("消費カロリー（目安）", "${Math.round(r.calories)} kcal")
             }
             Row { Stat("登り", "+${Math.round(r.gainM)} m"); Stat("下り", "-${Math.round(r.lossM)} m") }
+            r.unpavedFraction?.let { u ->
+                Row {
+                    Stat("未舗装の道", if (u >= 0) "${Math.round(u * 100)} %" else "分からない")
+                    Stat("急な坂（10%以上）", d.steepPercent?.let { "$it %" } ?: "--")
+                }
+                Text("道の種類：地図の情報から判定（© OpenStreetMap contributors）", color = Palette.dim, fontSize = 12.sp)
+            }
             if (r.avgHr > 0) {
                 Row { Stat("平均の心拍数", "${r.avgHr} 拍/分"); Stat("最大の心拍数", "${r.maxHr} 拍/分") }
             }
@@ -222,6 +253,20 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             Card {
                 SectionTitle("地図")
                 RouteMap(points, media = d.media, onMediaTap = { viewing = it })
+                SmallButton(if (exportingMap) "画像を作っています…" else "地図を画像で書き出す（共有）", Modifier.fillMaxWidth(), enabled = !exportingMap) {
+                    exportingMap = true
+                    scope.launch {
+                        MovieMaker.exportMap(context, runId)
+                            .onSuccess { MediaFiles.shareImage(context, it); mapMessage = null }
+                            .onFailure { mapMessage = "書き出せませんでした：${it.message}" }
+                        exportingMap = false
+                    }
+                }
+                Text(
+                    if (settings.hideZone != null) "書き出す画像には、隠す場所（自宅など）のまわりのルートは描きません。" else "隠す場所（自宅など）を決めておくと、そのまわりのルートを画像から消せます（設定）。",
+                    color = Palette.dim, fontSize = 12.sp,
+                )
+                mapMessage?.let { Text(it, color = Palette.warn, fontSize = 14.sp) }
             }
             Card {
                 SectionTitle("グラフ（横軸は距離）")

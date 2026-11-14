@@ -54,4 +54,12 @@ object MediaFiles {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         context.startActivity(Intent.createChooser(send, "共有").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+
+    /** アプリの中のファイル（画像）を、共有メニューで外に出す */
+    fun shareImage(context: Context, file: File) {
+        val uri = FileProvider.getUriForFile(context, "com.chill.run.files", file)
+        val send = Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(send, "地図を共有").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 }

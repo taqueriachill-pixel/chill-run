@@ -21,10 +21,26 @@ object RouteAnalysis {
         return if (total > 0) steep / total else 0.0
     }
 
-    /** トレイルの候補かどうか。1km あたりの登りと、坂の割合の両方が目安以上なら候補 */
-    fun looksLikeTrail(distanceM: Double, gainM: Double, steepFraction: Double, gainPerKm: Double, steepPercent: Double): Boolean {
+    /**
+     * トレイルの候補かどうか（仕様 9章）。目安は3つ：
+     * ①1km あたりの登り ②急な坂を通った割合 ③未舗装の道を通った割合。
+     * 分かっている目安のうち2つに当てはまれば候補。高さか道の種類が分からないときは、残りの目安で決める
+     * （高さが分からなければ①②は使えないので、③だけ。道の種類が分からなければ、①②の両方）。
+     * @param steepFraction 高さが分からなければ null
+     * @param unpavedFraction 道の種類が分からなければ null
+     * @return 決められないときは null
+     */
+    fun looksLikeTrail(
+        distanceM: Double, gainM: Double, steepFraction: Double?, unpavedFraction: Double?,
+        gainPerKm: Double, steepPercent: Double, unpavedPercent: Double,
+    ): Boolean? {
         if (distanceM < 500) return false
-        return gainM / (distanceM / 1000.0) >= gainPerKm && steepFraction * 100.0 >= steepPercent
+        val unpaved = unpavedFraction?.let { it * 100.0 >= unpavedPercent }
+        if (steepFraction == null) return unpaved
+        val climb = gainM / (distanceM / 1000.0) >= gainPerKm
+        val steep = steepFraction * 100.0 >= steepPercent
+        if (unpaved == null) return climb && steep
+        return listOf(climb, steep, unpaved).count { it } >= 2
     }
 
     /** ルートを stepM ごとの点に間引く（形の比べやすさのため） */

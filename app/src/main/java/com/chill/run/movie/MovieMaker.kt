@@ -122,9 +122,50 @@ object MovieMaker {
 
     private fun totalFrames() = (MovieScript.TOTAL_SEC * MovieScript.FPS).toInt()
 
+    /**
+     * 地図だけを、1枚の画像（PNG・縦長）に書き出す（仕様 2-5 の「地図の書き出し」）。
+     * ランムービーと同じく、隠す場所（自宅など）のまわりのルートは描かない。
+     * @return できた画像のファイル（アプリの中。共有メニューから外に出す）
+     */
+    suspend fun exportMap(context: Context, runId: Long): Result<File> = lock.withLock {
+        withContext(Dispatchers.Default) {
+            runCatching {
+                val app = context.applicationContext
+                val dao = AppDb.get(app).runDao()
+                val run = dao.getRun(runId) ?: error("記録が見つかりません")
+                val points = dao.points(runId)
+                if (points.size < 2) error("ルートの記録がありません")
+                val scene = prepare(app, run, points, mapOnly = true)
+                val bitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+                try {
+                    val c = Canvas(bitmap)
+                    drawMap(c, scene, 1f)
+                    // 上の帯の下に、日付・場所と、数字
+                    fill.color = Color.argb(150, 0, 0, 0); fill.alpha = 150
+                    c.drawRect(0f, 150f, W.toFloat(), 262f, fill)
+                    val date = dateFmt.format(Instant.ofEpochMilli(run.startTime).atZone(ZoneId.systemDefault()))
+                    drawText(c, date + if (scene.place.isNotEmpty()) "　${scene.place}" else "", 36f, 198f, 30f, align = Paint.Align.LEFT)
+                    val pace = if (run.distanceM > 10) run.movingMs / 1000.0 / (run.distanceM / 1000.0) else null
+                    drawText(
+                        c, "タイム ${Fmt.clock(run.movingMs)}　平均 ${Fmt.pace(pace)}/km　登り +${Math.round(run.gainM)}m",
+                        36f, 244f, 30f, Color.LTGRAY, Paint.Align.LEFT,
+                    )
+                    drawText(c, "Chill Run", W - 20f, H - 14f, 22f, Color.WHITE, Paint.Align.RIGHT, alpha = 200)
+                    // 共有するまでの一時置き場（アプリの「キャッシュ」。バックアップには入らない）
+                    val file = File(app.cacheDir, "exports/run_${runId}_map.png").also { it.parentFile?.mkdirs() }
+                    file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    file
+                } finally {
+                    bitmap.recycle()
+                    scene.map.recycle()
+                }
+            }
+        }
+    }
+
     // ---------- 下ごしらえ ----------
 
-    private suspend fun prepare(context: Context, run: RunEntity, points: List<PointEntity>): Scene {
+    private suspend fun prepare(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean = false): Scene {
         val dao = AppDb.get(context).runDao()
         val hide = Settings(context).hideZone
         val total = points.last().distM.coerceAtLeast(1.0)
@@ -184,7 +225,7 @@ object MovieMaker {
         // 写真・動画（最大4つ。多いときは、全体からまんべんなく選ぶ）
         val all = dao.media(run.id)
         val pictures = all.filter { it.kind == MediaFiles.PHOTO || it.kind == MediaFiles.VIDEO }
-        val chosen = if (pictures.size <= 4) pictures else (0 until 4).map { pictures[it * (pictures.size - 1) / 3] }
+        val chosen = if (mapOnly) emptyList() else if (pictures.size <= 4) pictures else (0 until 4).map { pictures[it * (pictures.size - 1) / 3] }
         val slotSec = if (chosen.isEmpty()) 0.0 else (MovieScript.STATS_START - 5.0) / chosen.size
         val media = chosen.mapNotNull { m ->
             val file = MediaFiles.file(context, m.file)
@@ -205,7 +246,7 @@ object MovieMaker {
         var tune: FloatArray? = null
         var tuneNote = ""
         val settings = Settings(context)
-        if (settings.movieMusic) {
+        if (settings.movieMusic && !mapOnly) {
             val words = (listOf(run.memo) + all.filter { it.kind == MediaFiles.MEMO }.map { it.text }).joinToString(" ")
             val zones = HeartZones(settings.maxHr, settings.restHr)
             val hr = points.mapNotNull { it.hr }

@@ -73,6 +73,9 @@ data class RunEntity(
     @ColumnInfo(defaultValue = "-1") val weatherCode: Int = -1,
     /** 天気と気温を、手で選んだか（手で選んだものは、自動では書き換えない） */
     @ColumnInfo(defaultValue = "0") val weatherManual: Boolean = false,
+    // ---- ここから、未舗装の道の判定のために追加 ----
+    /** 未舗装の道を通った割合（0〜1）。まだ調べていなければ null、調べたが分からなければ -1 */
+    val unpavedFraction: Double? = null,
 )
 
 /** いつものコース */
@@ -358,7 +361,7 @@ suspend fun RunDao.deleteRun(runId: Long) {
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
         IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -370,7 +373,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build().also { instance = it }
         }
     }
@@ -415,5 +418,12 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
 val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V6_TO_7.forEach { db.execSQL(it) }
+    }
+}
+
+/** 未舗装の道を通った割合の項目を足す（トレイルの判定用） */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V7_TO_8.forEach { db.execSQL(it) }
     }
 }
