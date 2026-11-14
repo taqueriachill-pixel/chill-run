@@ -138,10 +138,17 @@ class RunService : Service(), SensorEventListener, LocationListener {
         sensorManager = getSystemService(SensorManager::class.java)
         locationManager = getSystemService(LocationManager::class.java)
         notificationManager = getSystemService(NotificationManager::class.java)
+        // 前の版の通知チャンネル（重要度「低」）は、ロック画面に出ないことがあるので消す。
+        // Android は、作ったあとのチャンネルの重要度をアプリから変えられないため、新しい名前で作り直す
+        runCatching { notificationManager.deleteNotificationChannel("run") }
         notificationManager.createNotificationChannel(
-            NotificationChannel(CHANNEL, "ランの記録中", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "走っている間、距離や時間を表示します"
+            // 重要度「中」：ロック画面にも出る。音とバイブはなし
+            NotificationChannel(CHANNEL, "ランの記録中", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "走っている間、距離や時間と、メモ・写真・動画のボタンを表示します（ロック画面にも出ます）"
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
                 setShowBadge(false)
             }
         )
@@ -687,6 +694,14 @@ class RunService : Service(), SensorEventListener, LocationListener {
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
             .apply {
+                // Android 16 の「ライブ アップデート」：記録中の通知を、ロック画面やステータスバーの上のほうに優先して出してもらう。
+                // 対応していない端末では、ただ無視される
+                extras.putBoolean("android.requestPromotedOngoing", true)
+                if (t != null) runCatching {
+                    // ステータスバーの小さな欄に出す短い文字（例：5.2 km）
+                    Notification.Builder::class.java.getMethod("setShortCriticalText", String::class.java)
+                        .invoke(this, "${Fmt.km(t.distanceM)} km")
+                }
                 // 通知の欄にも「メモ」「写真」「動画」のボタンを並べる
                 if (t != null) {
                     val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -733,7 +748,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
     }
 
     companion object {
-        private const val CHANNEL = "run"
+        private const val CHANNEL = "run_live"
         private const val NOTIFICATION_ID = 1
         private const val GEOID_JAPAN_M = 37.0
         const val ACTION_START = "com.chill.run.START"
