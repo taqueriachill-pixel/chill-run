@@ -113,6 +113,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("videoStabilize", true)
         set(v) = p.edit().putBoolean("videoStabilize", v).apply()
 
+    /** 撮影でインカメラを使うか（撮影画面で切り替えると、次もその向きで開く） */
+    var frontCamera: Boolean
+        get() = p.getBoolean("frontCamera", false)
+        set(v) = p.edit().putBoolean("frontCamera", v).apply()
+
     // ---- ランムービーと、隠す場所 ----
     /** 走り終わったら、ランムービーを自動で作るか */
     var autoMovie: Boolean

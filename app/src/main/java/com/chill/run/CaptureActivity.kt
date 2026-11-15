@@ -25,6 +25,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -81,6 +82,9 @@ class CaptureActivity : ComponentActivity() {
     private var cameraReady by mutableStateOf(false)
     private var started = false
     private var stabilized = false
+    /** インカメラ（自分側のカメラ）で撮るか。前回の選び方を覚えておく */
+    private var front by mutableStateOf(false)
+    private var previewRef: PreviewView? = null
     private var stabilizeNote by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,6 +96,7 @@ class CaptureActivity : ComponentActivity() {
 
         val hasCamera = checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val running = RunHub.state.value.let { it.active && it.runId > 0 }
+        front = Settings(this).frontCamera && hasFrontCamera
         if (!hasCamera) {
             phase = "error"
             message = "カメラの許可がありません。\nロックを解除して、アプリの「許可の状態」で許可してください。"
@@ -105,7 +110,7 @@ class CaptureActivity : ComponentActivity() {
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
                     if (phase != "error") {
                         AndroidView(
-                            factory = { ctx -> PreviewView(ctx).also { bindCamera(it) } },
+                            factory = { ctx -> PreviewView(ctx).also { previewRef = it; bindCamera(it) } },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -114,10 +119,21 @@ class CaptureActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.SpaceBetween,
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text(
-                            if (isVideo) "動画（${Settings(this@CaptureActivity).videoSeconds}秒）" + (if (stabilizeNote.isNotEmpty()) "\n$stabilizeNote" else "") else "写真",
-                            color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                            Text(
+                                (if (isVideo) "動画（${Settings(this@CaptureActivity).videoSeconds}秒）" + (if (stabilizeNote.isNotEmpty()) "\n$stabilizeNote" else "") else "写真") +
+                                    if (front) "\nインカメラ" else "",
+                                color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f),
+                            )
+                            // 外カメラとインカメラの切り替え（切り替えると、カウントダウンはやり直し）
+                            if (phase == "ready" && hasFrontCamera) {
+                                Box(
+                                    Modifier.height(64.dp).background(Color(0xCC1F2A21)).border(2.dp, Color.White)
+                                        .clickable { switchCamera() }.padding(horizontal = 16.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) { Text(if (front) "↺ 外カメラ" else "↺ インカメラ", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black) }
+                            }
+                        }
                         Text(
                             when (phase) {
                                 "ready" -> if (cameraReady) countdown.toString() else "カメラの準備中…"
@@ -156,6 +172,19 @@ class CaptureActivity : ComponentActivity() {
         }
     }
 
+    /** このスマホにインカメラがあるか */
+    private val hasFrontCamera by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_FRONT) }
+
+    private fun selector() = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+
+    private fun switchCamera() {
+        if (phase != "ready" || started) return
+        front = !front
+        Settings(this).frontCamera = front
+        cameraReady = false
+        previewRef?.let { bindCamera(it) }
+    }
+
     private fun bindCamera(previewView: PreviewView) {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -165,7 +194,7 @@ class CaptureActivity : ComponentActivity() {
                 if (isVideo) {
                     val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HD)).build()
                     // 手ブレ補正：このスマホのカメラが対応していれば使う（映る範囲が少しせまくなる）
-                    val info = CameraSelector.DEFAULT_BACK_CAMERA.filter(provider.availableCameraInfos).firstOrNull()
+                    val info = selector().filter(provider.availableCameraInfos).firstOrNull()
                     val wanted = Settings(this).videoStabilize
                     val videoOk = wanted && info != null &&
                         runCatching { Recorder.getVideoCapabilities(info).isStabilizationSupported }.getOrDefault(false)
@@ -179,7 +208,7 @@ class CaptureActivity : ComponentActivity() {
                             .apply { if (stabilize) setVideoStabilizationEnabled(true) }
                             .build()
                         provider.unbindAll()
-                        provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, vc)
+                        provider.bindToLifecycle(this, selector(), preview, vc)
                         videoCapture = vc
                         stabilized = stabilize
                     }
@@ -197,7 +226,7 @@ class CaptureActivity : ComponentActivity() {
                 } else {
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                     val ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, ic)
+                    provider.bindToLifecycle(this, selector(), preview, ic)
                     imageCapture = ic
                 }
                 cameraReady = true
