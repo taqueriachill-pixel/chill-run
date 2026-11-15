@@ -7,7 +7,13 @@ import android.location.LocationManager
 import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,7 +32,9 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -98,11 +106,43 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
     }
 
     val accent = Palette.of(type)
+    val progress = rememberProgress()
+    val today = remember { java.time.LocalDate.now() }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("Chill Run", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Palette.text)
+        // 見出し：等高線の上に、大きな言葉
+        Box(Modifier.fillMaxWidth().height(if (live.active) 150.dp else 300.dp)) {
+            Topo(Modifier.matchParentSize(), Color(0xFFB9AE97))
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("CHILL RUN", color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp)
+                Text(
+                    today.format(java.time.format.DateTimeFormatter.ofPattern("MMM d · EEE", java.util.Locale.ENGLISH)).uppercase(),
+                    color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp,
+                )
+            }
+            if (!live.active) Display("GO\nOUT\nSIDE.", 108, Modifier.padding(top = 48.dp), color = Palette.earth)
+            else Display("ON THE\nRUN.", 64, Modifier.padding(top = 40.dp), color = Palette.earth)
+        }
+
+        // 今週・続いた週・レベル
+        progress?.let { p ->
+            FigureRow(
+                listOf(
+                    Triple("今週", "${p.weekDays}/${p.weekGoal} 日", if (p.weekDays >= p.weekGoal) Palette.ok else Palette.earth),
+                    Triple("れんぞく", "${p.streakWeeks} 週", Palette.signal),
+                    Triple("レベル", "${p.level}", Palette.earth),
+                ),
+            )
+            LevelBar(p)
+            if (p.weekDays < p.weekGoal) {
+                Text(
+                    "あと ${p.weekGoal - p.weekDays} 日走ると、今週のもくひょう達成（＋${com.chill.run.core.Progress.WEEK_GOAL_BONUS}）",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+            }
+        }
 
         if (live.active) {
             Card {
@@ -112,12 +152,11 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
         } else {
+            // ロードかトレイルか（大きな2つの札。選んだほうが塗られる）
+            TypeTile("ROAD", "街・川ぞい", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
+            TypeTile("TRAIL", "森・山", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }
+
             Card {
-                SectionTitle("種類")
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Chip("ロード", type == RunType.ROAD, Modifier.weight(1f), color = Palette.road) { type = RunType.ROAD }
-                    Chip("トレイル", type == RunType.TRAIL, Modifier.weight(1f), color = Palette.trail) { type = RunType.TRAIL }
-                }
                 SectionTitle("メニュー")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("自由に走る", goalKind == GoalKind.FREE, Modifier.weight(1f), color = accent) { goalKind = GoalKind.FREE }
@@ -206,26 +245,58 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                         null -> "GPS をさがしています…（空の見える場所で少し待つと正確になります）"
                         else -> if (a <= 10f) "GPS 良好（±${Math.round(a)}m）" else "GPS 受信中（±${Math.round(a)}m）もう少し待つと正確になります"
                     },
-                    color = if ((gpsAccuracy ?: 99f) <= 10f) Palette.trail else Palette.dim, fontSize = 14.sp,
+                    color = if ((gpsAccuracy ?: 99f) <= 10f) Palette.ok else Palette.dim, fontSize = 14.sp,
                 )
-                BigButton(
-                    "スタート", Modifier.fillMaxWidth(), color = accent,
-                    enabled = goalKind != GoalKind.INTERVAL || menu != null,
-                ) { startRun() }
+                StartButton(if (type == RunType.TRAIL) "TRAIL" else "ROAD", accent, enabled = goalKind != GoalKind.INTERVAL || menu != null) { startRun() }
             }
         }
 
+        // いちばん下：ほかの画面へ
+        Rule(thick = false)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SmallButton("記録の一覧", Modifier.weight(1f)) { onNavigate("history") }
+            SmallButton("きろく", Modifier.weight(1f)) { onNavigate("history") }
             SmallButton("ふりかえり", Modifier.weight(1f)) { onNavigate("review") }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            SmallButton("設定", Modifier.weight(1f)) { onNavigate("settings") }
+            SmallButton("せってい", Modifier.weight(1f)) { onNavigate("settings") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SmallButton("許可の状態", Modifier.weight(1f)) { onNavigate("permissions") }
             SmallButton("実機チェック", Modifier.weight(1f)) { onNavigate("check") }
         }
+        Gap(8)
+    }
+}
+
+/** ロード・トレイルの大きな札。選ばれていると塗りつぶし、そうでなければ線だけ */
+@Composable
+private fun TypeTile(word: String, sub: String, color: Color, selected: Boolean, onClick: () -> Unit) {
+    val fg = if (selected) Palette.on(color) else color
+    Row(
+        Modifier.fillMaxWidth().height(96.dp)
+            .background(if (selected) color else Color.Transparent)
+            .border(2.dp, color)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Display(word, 54, color = fg)
+        Text((if (selected) "✓ " else "") + sub, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** スタートの大きなボタン */
+@Composable
+private fun StartButton(word: String, color: Color, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(80.dp)
+            .background(if (enabled) color else Palette.line)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text("スタート", color = if (enabled) Palette.on(color) else Palette.dim, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Display("$word →", 34, color = if (enabled) Palette.on(color) else Palette.dim)
     }
 }
 

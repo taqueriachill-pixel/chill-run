@@ -88,6 +88,11 @@ class Settings(context: Context) {
         get() = p.getInt("trailUnpavedPercent", 30)
         set(v) = p.edit().putInt("trailUnpavedPercent", v).apply()
 
+    /** 週の目標（1週間に走る日数。1〜4、初期は2） */
+    var weeklyGoalDays: Int
+        get() = p.getInt("weeklyGoalDays", 2)
+        set(v) = p.edit().putInt("weeklyGoalDays", v.coerceIn(1, 4)).apply()
+
     /** 読み込んだプレイリストの名前。使っていなければ空 */
     var playlistName: String
         get() = p.getString("playlistName", "") ?: ""

@@ -339,6 +339,67 @@ class CoreTest {
         assertEquals(null, judge(0.0, null, null))
     }
 
+    // ---- 週の目標・続いた週・レベル ----
+    private val tokyo = java.time.ZoneId.of("Asia/Tokyo")
+    private fun at(y: Int, m: Int, d: Int, h: Int = 7) = java.time.LocalDateTime.of(y, m, d, h, 0).atZone(tokyo).toInstant().toEpochMilli()
+
+    @Test
+    fun level_curve() {
+        assertEquals(Triple(1, 0, 100), Progress.levelOf(0))
+        assertEquals(Triple(2, 0, 120), Progress.levelOf(100))
+        assertEquals(Triple(2, 119, 120), Progress.levelOf(219))
+        assertEquals(Triple(3, 0, 140), Progress.levelOf(220))
+    }
+
+    @Test
+    fun weekly_goal_streak_never_resets_and_bonuses_add_up() {
+        // 2026-11-02(月)の週から。週2日が目標
+        val runs = listOf(
+            RunFact(1, at(2026, 11, 2), 5000.0, 30.0, best1kMs = 330_000, best5kMs = 1_800_000), // 月：初回はベストにしない
+            RunFact(2, at(2026, 11, 2, 19), 2000.0, 0.0),                                    // 同じ日の2回目：走った日の分なし
+            RunFact(3, at(2026, 11, 4), 8240.0, 212.0, best1kMs = 320_000),                  // 水：2日目→週の目標達成（1週目）、1kmベスト
+            RunFact(4, at(2026, 11, 10), 5000.0, 0.0),                                        // 次の週の火
+            RunFact(5, at(2026, 11, 12), 5000.0, 0.0, best5kMs = 1_700_000),                 // 木：達成（2週続いた）、5kmベスト
+            // 11/16の週は走らない → 続いた数は 2 → 1（0 には戻らない）
+            RunFact(6, at(2026, 11, 24), 3000.0, 0.0),
+            RunFact(7, at(2026, 11, 26), 3000.0, 0.0),                                        // 達成 → 続いた数 2
+        )
+        val p = Progress.compute(runs, 2, tokyo, at(2026, 11, 27))
+        val b1 = p.perRun[1]!!
+        assertEquals(ExpBreakdown(50, 3, 10, 0, emptyList(), 0, 0, 0), b1)
+        assertEquals(0, p.perRun[2]!!.day)
+        val b3 = p.perRun[3]!!
+        assertEquals(82, b3.distance); assertEquals(21, b3.climb); assertEquals(10, b3.day)
+        assertEquals(listOf("1km"), b3.bestNames); assertEquals(20, b3.bests)
+        assertEquals(30, b3.weekGoal); assertEquals(0, b3.streak); assertEquals(1, b3.streakWeeks)
+        val b5 = p.perRun[5]!!
+        assertEquals(listOf("5km"), b5.bestNames)
+        assertEquals(2, b5.streakWeeks); assertEquals(10, b5.streak)
+        val b7 = p.perRun[7]!!
+        assertEquals(2, b7.streakWeeks)   // 2 → 休んだ週で 1 → 達成で 2
+        assertEquals(2, p.streakWeeks)
+        assertEquals(2, p.weekDays)       // 11/27 は 11/23 の週
+        assertEquals(p.perRun.values.sumOf { it.total }, p.totalExp)
+        // 今週に走っていなければ 0 日。さらに2週あけると、続いた数は 2 → 0（それより下にはならない）
+        val later = Progress.compute(runs, 2, tokyo, at(2026, 12, 17))
+        assertEquals(0, later.weekDays)
+        assertEquals(0, later.streakWeeks)
+        // 目標を週1日にすると、毎週の1回目で達成
+        val easy = Progress.compute(runs, 1, tokyo, at(2026, 11, 27))
+        assertEquals(30, easy.perRun[1]!!.weekGoal)
+        assertEquals(0, easy.perRun[3]!!.weekGoal)
+    }
+
+    @Test
+    fun streak_bonus_is_capped() {
+        // 15週続けて週1日走る
+        val runs = (0 until 15).map { RunFact(it.toLong(), at(2026, 1, 5).plus(it * 7L * 86_400_000L), 1000.0, 0.0) }
+        val p = Progress.compute(runs, 1, tokyo, at(2026, 4, 17))
+        assertEquals(15, p.streakWeeks)
+        assertEquals(50, p.perRun[14]!!.streak)
+        assertEquals(10, p.perRun[1]!!.streak)
+    }
+
     @Test
     fun playlist_m3u_is_matched_to_library() {
         val text = "\uFEFF#EXTM3U\n#EXTINF:215,Artist - Song\n/storage/emulated/0/Music/Album A/01 Song.mp3\n\n" +

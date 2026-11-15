@@ -3,6 +3,7 @@ package com.chill.run
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -21,7 +22,10 @@ import com.chill.run.ui.ScreenHeader
 class PrivacyActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+        )
         setContent {
             ChillTheme {
                 Column(Modifier.fillMaxSize().background(Palette.bg).safeDrawingPadding().padding(20.dp)) {
@@ -34,7 +38,8 @@ class PrivacyActivity : ComponentActivity() {
                             "・通信するのは、次のときだけです。\n" +
                             "　- 開始地点の標高を、国土地理院に問い合わせるとき（送るのは緯度と経度のみ）\n" +
                             "　- 地図を表示・一時保存するとき（国土地理院から地図を受け取る）\n" +
-                            "　- ランムービーの曲づくりのために、走った日の天気と気温を Open-Meteo に問い合わせるとき（送るのは、約1km 単位に丸めた位置と日付のみ）",
+                            "　- ランムービーの曲づくりのために、走った日の天気と気温を Open-Meteo に問い合わせるとき（送るのは、約1km 単位に丸めた位置と日付のみ）\n" +
+                            "　- 走ったルートのまわりの道の種類（舗装か土の道か）を、OpenStreetMap（Overpass API）に問い合わせるとき（送るのはルートの点。隠す場所のまわりは送らない。設定で止められる）",
                         color = Palette.text, fontSize = 16.sp, lineHeight = 26.sp,
                     )
                 }

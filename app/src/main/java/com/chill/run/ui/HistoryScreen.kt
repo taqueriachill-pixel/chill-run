@@ -1,6 +1,7 @@
 package com.chill.run.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,7 +51,24 @@ fun HistoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
     val courseNames = remember(courses) { courses.associate { it.id to it.name } }
 
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader("記録の一覧", onBack)
+        ScreenHeader("きろく", onBack)
+        // 今月の合計と、続いた週
+        val progress = rememberProgress()
+        val ym = remember { java.time.YearMonth.now() }
+        val month = runs.filter { java.time.YearMonth.from(Instant.ofEpochMilli(it.startTime).atZone(ZoneId.systemDefault())) == ym }
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceBetween) {
+            Display("${ym.monthValue}月", 44, color = Palette.earth)
+            Display("${"%.1f".format(month.sumOf { it.distanceM } / 1000)} KM", 44, color = Palette.earth, narrow = true)
+        }
+        FigureRow(
+            listOf(
+                Triple("今月の回数", "${month.size} 回", Palette.earth),
+                Triple("今週", "${progress?.weekDays ?: 0}/${progress?.weekGoal ?: 2} 日", Palette.earth),
+                Triple("れんぞく", "${progress?.streakWeeks ?: 0} 週", Palette.signal),
+            ),
+            valueSize = 26,
+        )
+        Gap(10)
         if (runs.isEmpty()) {
             Text("まだ記録がありません。", color = Palette.dim, fontSize = 16.sp, modifier = Modifier.padding(top = 24.dp))
         }
@@ -63,10 +81,10 @@ fun HistoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
 @Composable
 private fun RunRow(run: RunEntity, courseName: String?, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.card).clickable(onClick = onClick),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Palette.card).border(1.dp, Palette.line, RoundedCornerShape(4.dp)).clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // ロードは海の青、トレイルは森の緑の印
+        // ロードは深い緑、トレイルはオレンジの印
         Box(Modifier.width(8.dp).height(84.dp).background(Palette.of(run.type)))
         Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -75,7 +93,7 @@ private fun RunRow(run: RunEntity, courseName: String?, onClick: () -> Unit) {
                 if (courseName != null) Text(courseName, color = Palette.dim, fontSize = 14.sp, maxLines = 1)
             }
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("${Fmt.km(run.distanceM)} km", color = Palette.text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text("${Fmt.km(run.distanceM)} km", color = Palette.text, fontSize = 28.sp, fontFamily = Type.narrow, fontWeight = FontWeight(800))
                 Text(Fmt.clock(run.movingMs), color = Palette.text, fontSize = 15.sp)
                 Text("${Fmt.pace(avgPace(run))}/km", color = Palette.text, fontSize = 15.sp)
             }

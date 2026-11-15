@@ -113,6 +113,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     }
     var trailGain by remember { mutableIntStateOf(settings.trailGainPerKm) }
     var trailSteep by remember { mutableIntStateOf(settings.trailSteepPercent) }
+    var weeklyGoal by remember { mutableIntStateOf(settings.weeklyGoalDays) }
     var trailUnpaved by remember { mutableIntStateOf(settings.trailUnpavedPercent) }
     var osmSurface by remember { mutableStateOf(settings.osmSurface) }
 
@@ -136,6 +137,15 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         ScreenHeader("設定", onBack)
 
+        Card {
+            SectionTitle("今週のもくひょう")
+            Text("1週間（月曜〜日曜）に走る日数。達成すると経験値 ＋30。達成した週が続くと、さらにボーナスが入ります。届かない週があっても、続いた数は1つ減るだけです。", color = Palette.dim, fontSize = 13.sp)
+            Stepper(
+                "週 $weeklyGoal 日",
+                onMinus = { weeklyGoal = (weeklyGoal - 1).coerceAtLeast(1); settings.weeklyGoalDays = weeklyGoal },
+                onPlus = { weeklyGoal = (weeklyGoal + 1).coerceAtMost(4); settings.weeklyGoalDays = weeklyGoal },
+            )
+        }
         Card {
             SectionTitle("記録")
             SwitchRow("止まっている間は時間を止める（自動の一時停止）", autoPause) { autoPause = it; settings.autoPause = it }

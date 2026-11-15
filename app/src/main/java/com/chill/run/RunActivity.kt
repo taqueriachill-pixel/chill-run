@@ -5,8 +5,10 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -17,13 +19,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -34,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -48,7 +54,15 @@ import com.chill.run.run.LiveState
 import com.chill.run.run.RunHub
 import com.chill.run.run.RunService
 import com.chill.run.ui.ChillTheme
+import com.chill.run.ui.Display
+import com.chill.run.ui.FigureRow
 import com.chill.run.ui.Palette
+import com.chill.run.ui.RouteSketch
+import com.chill.run.ui.Topo
+import com.chill.run.ui.Type
+import com.chill.run.data.AppDb
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
 /**
@@ -60,7 +74,10 @@ class RunActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+        )
         setContent {
             ChillTheme {
                 val state by RunHub.state.collectAsState()
@@ -105,115 +122,123 @@ private fun RunScreen(
     onMusicToggle: () -> Unit,
     onMusicNext: () -> Unit,
 ) {
+    val context = LocalContext.current
     val accent = Palette.of(state.type)
-    Column(
-        Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding().padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (state.type == RunType.TRAIL) "TRAIL" else "ROAD",
-                    color = accent, fontSize = 22.sp, fontWeight = FontWeight.Black,
+    // 走ったルートの形（画面を開き直したときは、記録から読み直す）
+    val track = remember { mutableStateListOf<Pair<Double, Double>>() }
+    LaunchedEffect(state.runId) {
+        if (state.runId > 0 && track.isEmpty()) {
+            val pts = withContext(Dispatchers.IO) { runCatching { AppDb.get(context).runDao().points(state.runId) }.getOrDefault(emptyList()) }
+            track.addAll(pts.map { it.lat to it.lon })
+        }
+    }
+    LaunchedEffect(state.lat, state.lon) {
+        val lat = state.lat ?: return@LaunchedEffect
+        val lon = state.lon ?: return@LaunchedEffect
+        val last = track.lastOrNull()
+        if (last == null || Math.abs(last.first - lat) + Math.abs(last.second - lon) > 0.00004) track.add(lat to lon)
+    }
+    val km = (state.distanceM / 1000).toInt() + 1
+
+    Column(Modifier.fillMaxSize().background(Palette.bg)) {
+        // 上：深い緑に、等高線とルートの形。いまの状態
+        Box(Modifier.fillMaxWidth().background(Palette.earth)) {
+            Topo(Modifier.matchParentSize(), Color(0xFF435244), rings = 12)
+            Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp).padding(top = 6.dp, bottom = 12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        (if (state.type == RunType.TRAIL) "TRAIL" else "ROAD") + " · KM $km",
+                        color = Palette.bg, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 16.sp, letterSpacing = 2.sp,
+                    )
+                    Text(gpsLabel(state.gpsAccuracyM), color = gpsColor(state.gpsAccuracyM), fontSize = 13.sp)
+                }
+                RouteSketch(Modifier.fillMaxWidth().height(150.dp), track, Palette.signal, Palette.bg)
+                val phase = state.phase
+                if (phase != null) {
+                    val running = phase.kind == PhaseKind.RUN
+                    val remaining = state.phaseRemaining ?: 0.0
+                    Row(
+                        Modifier.fillMaxWidth().background(if (running) Palette.signal else Palette.bg).padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val fg = if (running) Palette.on(Palette.signal) else Palette.earth
+                        Text(AnnounceText.phaseName(phase.kind) + if (phase.rep > 0) " ${phase.rep}/${state.totalReps}" else "", color = fg, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                        Text(
+                            if (phase.byDistance) "あと ${Math.round(remaining.coerceAtLeast(0.0))}m"
+                            else "あと ${Fmt.clock((remaining.coerceAtLeast(0.0) * 1000).toLong() + 999)}",
+                            color = fg, fontSize = 24.sp, fontFamily = Type.narrow, fontWeight = FontWeight(800),
+                        )
+                    }
+                }
+                val status = when {
+                    state.manualPaused -> "一時停止中"
+                    state.autoPaused -> "止まっているので時間を止めています"
+                    else -> goalLine(state)
+                }
+                Text(status, color = if (state.manualPaused || state.autoPaused) Color(0xFFFFB27A) else Color(0xFFCFD6CC), fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+
+        // 下：生成りの紙に、大きな数字とボタン
+        Column(
+            Modifier.fillMaxWidth().weight(1f).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text("きょり", color = Palette.dim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Display(Fmt.km(state.distanceM), 112, color = Palette.earth)
+                    Display(" KM", 30, Modifier.padding(bottom = 14.dp), color = Palette.earth)
+                }
+                val z = state.zone
+                FigureRow(
+                    listOf(
+                        Triple("タイム", Fmt.clock(state.movingMs), Palette.earth),
+                        Triple("ペース /km", Fmt.pace(state.pace), Palette.earth),
+                        if (state.hrEnabled) Triple(if (z != null && z >= 1) "心拍 Z$z" else "心拍", state.hr?.toString() ?: "--", if (z != null) Palette.zone(z) else Palette.earth)
+                        else Triple("平均ペース", Fmt.pace(state.avgPace), Palette.earth),
+                    ),
+                    valueSize = 32,
                 )
-                Text(gpsLabel(state.gpsAccuracyM), color = gpsColor(state.gpsAccuracyM), fontSize = 14.sp)
+                Text(
+                    (if (state.hrEnabled) "平均 ${Fmt.pace(state.avgPace)}/km　" else "") +
+                        "ケイデンス ${state.cadence ?: "--"}　登り +${Math.round(state.gainM)}m" +
+                        (state.altitudeM?.let { "　標高 ${Math.round(it)}m" } ?: "") +
+                        if (state.hrEnabled && state.hr == null && state.hrStatus.isNotEmpty()) "\n心拍数：${state.hrStatus}" else "",
+                    color = Palette.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp),
+                )
             }
-            val status = when {
-                state.manualPaused -> "一時停止中"
-                state.autoPaused -> "止まっているので時間を止めています"
-                else -> goalLine(state)
-            }
-            // インターバル中は、いまの区間と残りを大きく出す
-            val phase = state.phase
-            if (phase != null) {
-                val running = phase.kind == PhaseKind.RUN
-                val remaining = state.phaseRemaining ?: 0.0
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(16.dp))
-                        .background(if (running) accent else Color(0xFF26343C)).padding(horizontal = 16.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        AnnounceText.phaseName(phase.kind) + if (phase.rep > 0) " ${phase.rep}/${state.totalReps}" else "",
-                        color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Black,
-                    )
-                    Text(
-                        if (phase.byDistance) "あと ${Math.round(remaining.coerceAtLeast(0.0))}m"
-                        else "あと ${Fmt.clock((remaining.coerceAtLeast(0.0) * 1000).toLong() + 999)}",
-                        color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-            Text(
-                status,
-                color = if (state.manualPaused || state.autoPaused) Palette.warn else Palette.dim,
-                fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Text(Fmt.km(state.distanceM), color = Color.White, fontSize = 88.sp, fontWeight = FontWeight.Black, lineHeight = 88.sp)
-            Text("km", color = Palette.dim, fontSize = 20.sp)
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
-                BigStat("タイム", Fmt.clock(state.movingMs), Modifier.weight(1f))
-                BigStat("ペース /km", Fmt.pace(state.pace), Modifier.weight(1f))
-            }
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                BigStat("平均ペース", Fmt.pace(state.avgPace), Modifier.weight(1f), small = true)
-                if (state.hrEnabled) {
-                    val z = state.zone
-                    BigStat(
-                        if (z != null) (if (z >= 1) "心拍 ゾーン$z" else "心拍") else "心拍",
-                        state.hr?.toString() ?: "--", Modifier.weight(1f), small = true,
-                        color = if (z != null) Palette.zone(z) else Color.White,
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.musicOn) {
+                    Row(Modifier.fillMaxWidth().border(1.5.dp, Palette.line).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(state.musicTitle.ifEmpty { "音楽の準備中…" }, color = Palette.text, fontSize = 14.sp, maxLines = 1)
+                            Text(state.musicInfo, color = Palette.dim, fontSize = 11.sp, maxLines = 1)
+                        }
+                        MusicButton(if (state.musicPlaying) "止める" else "流す", onMusicToggle)
+                        MusicButton("次の曲", onMusicNext)
+                    }
+                }
+                // 走りながら残す：メモ・写真・動画（1回押すだけ。汗や手袋でも押しやすい大きさ）
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TapButton(
+                        label = if (state.recording) "止める" else "メモ",
+                        sub = if (state.recording) "録音中 ${state.recordingSec}秒" else if (state.micReady) "声を録音" else "マイクの許可なし",
+                        filled = state.recording, modifier = Modifier.weight(1f), onClick = onMemo,
                     )
+                    TapButton("写真", "3秒後に撮る", false, Modifier.weight(1f), enabled = !state.recording, onClick = onPhoto)
+                    TapButton("動画", "3秒後に撮る", false, Modifier.weight(1f), enabled = !state.recording, onClick = onVideo)
                 }
-                BigStat("ケイデンス", state.cadence?.toString() ?: "--", Modifier.weight(1f), small = true)
-                BigStat("登り", "+${Math.round(state.gainM)}m", Modifier.weight(1f), small = true)
-            }
-            Text(
-                "標高：${state.elevationSource}" + (state.altitudeM?.let { "　いま ${Math.round(it)}m" } ?: "") +
-                    if (state.hrEnabled && state.hr == null && state.hrStatus.isNotEmpty()) "\n心拍数：${state.hrStatus}" else "",
-                color = Palette.dim, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp), textAlign = TextAlign.Center,
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 音楽：いまの曲と、止める・次の曲
-        if (state.musicOn) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF16222A)).padding(start = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(state.musicTitle.ifEmpty { "音楽の準備中…" }, color = Color.White, fontSize = 14.sp, maxLines = 1)
-                    Text(state.musicInfo, color = Palette.dim, fontSize = 11.sp, maxLines = 1)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HoldButton(
+                        label = if (state.manualPaused) "再開" else "一時停止",
+                        color = if (state.manualPaused) accent else Palette.signal,
+                        modifier = Modifier.weight(1f), onHold = onPauseToggle,
+                    )
+                    HoldButton(label = "終了", color = Palette.earth, modifier = Modifier.weight(1f), onHold = onFinish)
                 }
-                MusicButton(if (state.musicPlaying) "止める" else "流す", onMusicToggle)
-                MusicButton("次の曲", onMusicNext)
             }
-        }
-        // 走りながら残す：メモ・写真・動画（1回押すだけ。汗や手袋でも押しやすい大きさ）
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TapButton(
-                label = if (state.recording) "止める" else "メモ",
-                sub = if (state.recording) "録音中 ${state.recordingSec}秒" else if (state.micReady) "声を録音" else "マイクの許可なし",
-                color = if (state.recording) Palette.danger else Color(0xFF24506B),
-                modifier = Modifier.weight(1f), onClick = onMemo,
-            )
-            TapButton("写真", "3秒後に撮る", Color(0xFF24506B), Modifier.weight(1f), enabled = !state.recording, onClick = onPhoto)
-            TapButton("動画", "3秒後に撮る", Color(0xFF24506B), Modifier.weight(1f), enabled = !state.recording, onClick = onVideo)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            HoldButton(
-                label = if (state.manualPaused) "再開" else "一時停止",
-                color = if (state.manualPaused) accent else Color(0xFF3A4A54),
-                modifier = Modifier.weight(1f),
-                onHold = onPauseToggle,
-            )
-            HoldButton(label = "終了", color = Palette.danger, modifier = Modifier.weight(1f), onHold = onFinish)
-        }
         }
     }
 }
@@ -237,18 +262,10 @@ private fun gpsLabel(acc: Float?): String = when {
 }
 
 private fun gpsColor(acc: Float?): Color = when {
-    acc == null -> Palette.warn
-    acc <= 10f -> Palette.trail
-    acc <= 30f -> Palette.dim
-    else -> Palette.warn
-}
-
-@Composable
-private fun BigStat(label: String, value: String, modifier: Modifier = Modifier, small: Boolean = false, color: Color = Color.White) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = color, fontSize = if (small) 30.sp else 46.sp, fontWeight = FontWeight.Bold)
-        Text(label, color = Palette.dim, fontSize = 14.sp)
-    }
+    acc == null -> Color(0xFFFFB27A)
+    acc <= 10f -> Color(0xFF9FD8A8)
+    acc <= 30f -> Color(0xFFCFD6CC)
+    else -> Color(0xFFFFB27A)
 }
 
 /** 間違えて押さないよう、長押しで動くボタン。短く押したときは使い方を出す */
@@ -266,8 +283,7 @@ private fun HoldButton(label: String, color: Color, modifier: Modifier = Modifie
     }
     Box(
         modifier = modifier
-            .height(96.dp)
-            .clip(RoundedCornerShape(22.dp))
+            .height(92.dp)
             .background(color)
             .pointerInput(Unit) {
                 detectTapGestures(
@@ -281,30 +297,31 @@ private fun HoldButton(label: String, color: Color, modifier: Modifier = Modifie
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black)
+            Text(label, color = Palette.on(color), fontSize = 26.sp, fontWeight = FontWeight.Black)
             Text(
                 if (hint) "長く押してください" else "長押し",
-                color = if (hint) Color.White else Color(0xCCFFFFFF),
+                color = Palette.on(color),
                 fontSize = 14.sp, textAlign = TextAlign.Center,
             )
         }
     }
 }
 
-/** 1回押すだけで動く大きなボタン（メモ・写真・動画） */
+/** 1回押すだけで動く大きなボタン（メモ・写真・動画）。録音中のメモだけ塗りつぶす */
 @Composable
-private fun TapButton(label: String, sub: String, color: Color, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+private fun TapButton(label: String, sub: String, filled: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    val fg = when { filled -> Color.White; enabled -> Palette.earth; else -> Palette.dim }
     Box(
         modifier = modifier
-            .height(100.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(if (enabled) color else Color(0xFF1C262C))
+            .height(92.dp)
+            .background(if (filled) Palette.danger else Color.Transparent)
+            .border(2.dp, if (filled) Palette.danger else if (enabled) Palette.earth else Palette.line)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, color = if (enabled) Color.White else Palette.dim, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            Text(sub, color = Color(0xCCFFFFFF), fontSize = 12.sp, textAlign = TextAlign.Center)
+            Text(label, color = fg, fontSize = 23.sp, fontWeight = FontWeight.Black)
+            Text(sub, color = fg, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }
 }
@@ -314,5 +331,5 @@ private fun MusicButton(label: String, onClick: () -> Unit) {
     Box(
         Modifier.height(56.dp).clickable(onClick = onClick).padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
-    ) { Text(label, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    ) { Text(label, color = Palette.earth, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
 }

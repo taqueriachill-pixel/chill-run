@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -189,16 +190,53 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         val splits = d.splits
         val color = Palette.of(r.type)
 
-        // ロードかトレイルかを大きく
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(color).padding(16.dp)) {
-            Text(
-                if (r.type == "TRAIL") "トレイル・獲得標高 +${Math.round(r.gainM)}m" else "ロード",
-                color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black,
-            )
+        // ロードかトレイルかと、距離を大きく（雑誌の見出しのように）
+        Column(Modifier.fillMaxWidth()) {
             Text(
                 formatDate(r.startTime) + (d.course?.let { "　${it.name}" } ?: "") + if (r.goalKind == "INTERVAL") "　インターバル" else "",
-                color = Color.White, fontSize = 15.sp,
+                color = Palette.dim, fontSize = 14.sp, fontWeight = FontWeight.Bold,
             )
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Display(if (r.type == "TRAIL") "TRAIL" else "ROAD", 60, color = color)
+                Display("${Fmt.km(r.distanceM)} KM", 40, Modifier.padding(bottom = 4.dp), color = Palette.earth, narrow = true)
+            }
+            FigureRow(
+                listOf(
+                    Triple("タイム", Fmt.clock(r.movingMs), Palette.earth),
+                    Triple("ペース /km", Fmt.pace(avgPace(r)), Palette.earth),
+                    Triple("のぼり", "+${Math.round(r.gainM)} m", if (r.type == "TRAIL") Palette.signal else Palette.earth),
+                ),
+                valueSize = 30,
+            )
+        }
+
+        // このランでもらった経験値（週の目標・続いた週・レベル）
+        val progress = rememberProgress()
+        val exp = progress?.perRun?.get(r.id)
+        if (progress != null && exp != null) {
+            Card {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                    SectionTitle("けいけんち")
+                    Display("＋${exp.total}", 30, color = Palette.earth, narrow = true)
+                }
+                val rows = buildList {
+                    add("きょり ${"%.1f".format(r.distanceM / 1000)}km" to exp.distance)
+                    if (exp.climb > 0) add("のぼり ${Math.round(r.gainM)}m" to exp.climb)
+                    if (exp.day > 0) add("走った日" to exp.day)
+                    if (exp.bests > 0) add("自己ベスト（${exp.bestNames.joinToString("・")}）" to exp.bests)
+                    if (exp.weekGoal > 0) add("今週のもくひょう 達成" to exp.weekGoal)
+                    if (exp.streak > 0) add("れんぞく ${exp.streakWeeks} 週" to exp.streak)
+                }
+                rows.forEach { (label, v) ->
+                    val strong = label.startsWith("今週") || label.startsWith("れんぞく") || label.startsWith("自己")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(label, color = if (strong) Palette.signal else Palette.text, fontSize = 14.sp, fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal)
+                        Text("＋$v", color = if (strong) Palette.signal else Palette.text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                val after = progress.levelAfter[r.id]
+                if (after != null) Text("このランのあと：レベル $after", color = Palette.dim, fontSize = 13.sp)
+            }
         }
 
         // 自動の判定が、選んだ種類と違ったとき
@@ -221,9 +259,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
         }
 
         Card {
-            Row { Stat("距離", "${Fmt.km(r.distanceM)} km"); Stat("タイム", Fmt.clock(r.movingMs)) }
             Row {
-                Stat("平均ペース", "${Fmt.pace(avgPace(r))}/km")
                 Stat("最速の1km", Fmt.pace(splits.filter { it.distanceM >= 999 }.minOfOrNull { it.movingMs / 1000.0 }) + "/km")
             }
             Row {
