@@ -35,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -155,8 +157,8 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             }
         } else {
             // ロードかトレイルか（大きな2つの札。選んだほうが塗られる）
-            TypeTile("ROAD", "街・川ぞい", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
-            TypeTile("TRAIL", "森・山", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }
+            TypeTile("ROAD", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
+            TypeTile("TRAIL", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }
 
             Card {
                 SectionTitle("メニュー")
@@ -270,10 +272,11 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
 
 /** ロード・トレイルの大きな札。選ばれていると塗りつぶし、そうでなければ線だけ */
 @Composable
-private fun TypeTile(word: String, sub: String, color: Color, selected: Boolean, onClick: () -> Unit) {
+private fun TypeTile(word: String, color: Color, selected: Boolean, onClick: () -> Unit) {
     val fg = if (selected) Palette.on(color) else color
     Row(
         Modifier.fillMaxWidth().height(96.dp)
+            .semantics { this.selected = selected }
             .background(if (selected) color else Color.Transparent)
             .border(2.dp, color)
             .clickable(onClick = onClick)
@@ -282,7 +285,7 @@ private fun TypeTile(word: String, sub: String, color: Color, selected: Boolean,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Display(word, 54, color = fg)
-        Text((if (selected) "✓ " else "") + sub, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        if (selected) Text("✓", color = fg, fontSize = 26.sp, fontWeight = FontWeight.Black)
     }
 }
 

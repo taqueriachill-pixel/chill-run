@@ -130,9 +130,9 @@ class CaptureActivity : ComponentActivity() {
                             fontWeight = FontWeight.Black, textAlign = TextAlign.Center,
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            BottomButton("やめる", Color(0xFF3A4A54), Modifier.weight(1f)) { cancelAndClose() }
+                            BottomButton("やめる", Palette.earth, Modifier.weight(1f)) { cancelAndClose() }
                             if (phase == "ready") {
-                                BottomButton(if (isVideo) "すぐ撮り始める" else "すぐ撮る", Palette.danger, Modifier.weight(1.4f)) { shoot() }
+                                BottomButton(if (isVideo) "すぐ撮り始める" else "すぐ撮る", Palette.signal, Modifier.weight(1.4f)) { shoot() }
                             }
                         }
                     }

@@ -684,6 +684,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         val text = if (t == null) "" else "$status ・ 平均ペース ${Fmt.pace(t.averagePace())}"
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_run)
+            .setColor(0xFF2D3A2E.toInt())
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)

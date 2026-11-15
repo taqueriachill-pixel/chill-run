@@ -19,6 +19,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.compose.ui.graphics.asAndroidBitmap
+import com.chill.run.R
 import com.chill.run.core.Fmt
 import com.chill.run.core.HeartZones
 import com.chill.run.core.MapMath
@@ -55,12 +56,18 @@ import kotlin.math.pow
 object MovieMaker {
     private const val W = 720
     private const val H = 1280
+    private val enDate = DateTimeFormatter.ofPattern("MMM d · EEE", Locale.ENGLISH)
     private const val TILE_PX = 384.0 // 地図の文字が読めるよう、タイルを 1.5倍で描く
     private const val AUDIO_RATE = 44100
     private val lock = Mutex()
-    private val ROAD = Color.parseColor("#2E9BD6")
-    private val TRAIL = Color.parseColor("#3DAA6B")
-    private val BG = Color.parseColor("#0B1418")
+    // 色（アプリと同じ「アウトドア誌」の見た目）
+    private val ROAD = Color.parseColor("#2D3A2E")   // 深い緑
+    private val TRAIL = Color.parseColor("#E8571E")  // 信号のオレンジ
+    private val BG = Color.parseColor("#F3EFE6")     // 生成りの紙
+    private val INK = Color.parseColor("#2D3A2E")
+    private val DIM = Color.parseColor("#6C6556")
+    private val TOPO = Color.parseColor("#C9BFA9")
+    private val SIGNAL = TRAIL
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy年M月d日(E)", Locale.JAPAN)
 
     private class Scene(
@@ -141,16 +148,16 @@ object MovieMaker {
                     val c = Canvas(bitmap)
                     drawMap(c, scene, 1f)
                     // 上の帯の下に、日付・場所と、数字
-                    fill.color = Color.argb(150, 0, 0, 0); fill.alpha = 150
+                    fill.color = BG; fill.alpha = 240
                     c.drawRect(0f, 150f, W.toFloat(), 262f, fill)
                     val date = dateFmt.format(Instant.ofEpochMilli(run.startTime).atZone(ZoneId.systemDefault()))
-                    drawText(c, date + if (scene.place.isNotEmpty()) "　${scene.place}" else "", 36f, 198f, 30f, align = Paint.Align.LEFT)
+                    drawText(c, date + if (scene.place.isNotEmpty()) "　${scene.place}" else "", 36f, 198f, 30f, INK, Paint.Align.LEFT)
                     val pace = if (run.distanceM > 10) run.movingMs / 1000.0 / (run.distanceM / 1000.0) else null
                     drawText(
                         c, "タイム ${Fmt.clock(run.movingMs)}　平均 ${Fmt.pace(pace)}/km　登り +${Math.round(run.gainM)}m",
-                        36f, 244f, 30f, Color.LTGRAY, Paint.Align.LEFT,
+                        36f, 244f, 30f, DIM, Paint.Align.LEFT,
                     )
-                    drawText(c, "Chill Run", W - 20f, H - 14f, 22f, Color.WHITE, Paint.Align.RIGHT, alpha = 200)
+                    drawLatin(c, "CHILL RUN", W - 20f, H - 14f, 24f, INK, Paint.Align.RIGHT, heavy = false, spacing = 0.12f)
                     // 共有するまでの一時置き場（アプリの「キャッシュ」。バックアップには入らない）
                     val file = File(app.cacheDir, "exports/run_${runId}_map.png").also { it.parentFile?.mkdirs() }
                     file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -166,6 +173,7 @@ object MovieMaker {
     // ---------- 下ごしらえ ----------
 
     private suspend fun prepare(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean = false): Scene {
+        loadFonts(context)
         val dao = AppDb.get(context).runDao()
         val hide = Settings(context).hideZone
         val total = points.last().distM.coerceAtLeast(1.0)
@@ -297,6 +305,43 @@ object MovieMaker {
     // ---------- 絵を描く ----------
 
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.DEFAULT_BOLD }
+    /** 数字と英字：Archivo を細長い極太（見出し）と、少し細長い太字（数字）で */
+    private val condensed = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val narrow = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var fontsReady = false
+
+    private fun loadFonts(context: Context) {
+        if (fontsReady) return
+        runCatching {
+            val base = context.resources.getFont(R.font.archivo)
+            condensed.typeface = base; condensed.fontVariationSettings = "'wdth' 62, 'wght' 900"
+            narrow.typeface = base; narrow.fontVariationSettings = "'wdth' 75, 'wght' 800"
+        }.onFailure {
+            condensed.typeface = Typeface.DEFAULT_BOLD; narrow.typeface = Typeface.DEFAULT_BOLD
+        }
+        fontsReady = true
+    }
+
+    /** 英字・数字を Archivo で書く。wide=false で少し細長い太字、true で細長い極太 */
+    private fun drawLatin(c: Canvas, s: String, x: Float, y: Float, size: Float, color: Int, align: Paint.Align = Paint.Align.LEFT, heavy: Boolean = true, spacing: Float = 0f, alpha: Int = 255) {
+        val p = if (heavy) condensed else narrow
+        p.textSize = size; p.color = color; p.textAlign = align; p.alpha = alpha; p.letterSpacing = spacing
+        c.drawText(s, x, y, p)
+    }
+
+    /** 等高線の模様（飾り） */
+    private fun drawTopo(c: Canvas, color: Int, cx: Float, cy: Float, rings: Int = 12, alpha: Int = 255) {
+        line.color = color; line.alpha = alpha; line.strokeWidth = 2f
+        c.save()
+        c.rotate(-14f, cx, cy)
+        for (i in 0 until rings) {
+            val rx = 70f + i * 46f
+            val ry = 42f + i * 28f
+            c.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, line)
+        }
+        c.restore()
+        line.alpha = 255
+    }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
 
@@ -322,15 +367,18 @@ object MovieMaker {
 
     private fun drawTitle(c: Canvas, s: Scene, t: Double) {
         c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.68f, H * 0.36f)
         val a = (t / 0.5).coerceIn(0.0, 1.0)
         val alpha = (a * 255).toInt()
-        // 海の青／森の緑の帯
-        fill.color = s.accent; fill.alpha = alpha
-        c.drawRect(0f, H * 0.36f, W.toFloat(), H * 0.37f, fill)
-        drawText(c, typeWord(s), W / 2f, H * 0.34f - (1 - a).toFloat() * 30, 170f, s.accent, alpha = alpha)
-        val date = dateFmt.format(Instant.ofEpochMilli(s.run.startTime).atZone(ZoneId.systemDefault()))
-        drawText(c, date, W / 2f, H * 0.44f, 46f, alpha = alpha)
-        if (s.place.isNotEmpty()) drawText(c, s.place, W / 2f, H * 0.52f, 62f, alpha = alpha)
+        val day = Instant.ofEpochMilli(s.run.startTime).atZone(ZoneId.systemDefault())
+        drawLatin(c, "CHILL RUN", 48f, 110f, 34f, INK, heavy = false, spacing = 0.12f, alpha = alpha)
+        drawLatin(c, enDate.format(day).uppercase(), W - 48f, 110f, 34f, INK, Paint.Align.RIGHT, heavy = false, spacing = 0.12f, alpha = alpha)
+        // 種類を、下からせり上がる大きな字で
+        drawLatin(c, typeWord(s), 40f, H * 0.56f + (1 - a).toFloat() * 40, 250f, s.accent, alpha = alpha)
+        fill.color = INK; fill.alpha = alpha
+        c.drawRect(48f, H * 0.6f, W - 48f, H * 0.6f + 6f, fill)
+        drawText(c, dateFmt.format(day), 48f, H * 0.6f + 70f, 40f, INK, Paint.Align.LEFT, alpha = alpha)
+        if (s.place.isNotEmpty()) drawText(c, s.place, 48f, H * 0.6f + 140f, 56f, INK, Paint.Align.LEFT, alpha = alpha)
     }
 
     private fun drawMap(c: Canvas, s: Scene, progress: Float) {
@@ -346,29 +394,29 @@ object MovieMaker {
                 head = p
             }
             if (!started) continue
-            line.color = Color.WHITE; line.strokeWidth = 16f
+            line.color = BG; line.strokeWidth = 18f
             c.drawPath(path, line)
-            line.color = s.accent; line.strokeWidth = 10f
+            line.color = SIGNAL; line.strokeWidth = 10f
             c.drawPath(path, line)
         }
         head?.let {
-            fill.color = Color.WHITE; fill.alpha = 255
-            c.drawCircle(it[0], it[1], 16f, fill)
-            fill.color = s.accent
-            c.drawCircle(it[0], it[1], 10f, fill)
+            fill.color = BG; fill.alpha = 255
+            c.drawCircle(it[0], it[1], 17f, fill)
+            line.color = SIGNAL; line.strokeWidth = 7f
+            c.drawCircle(it[0], it[1], 13f, line)
         }
-        // 上の帯：ロードかトレイルか
-        fill.color = Color.argb(170, 0, 0, 0)
+        // 上の帯（深い緑）：ロードかトレイルかと、距離
+        fill.color = INK; fill.alpha = 255
         c.drawRect(0f, 0f, W.toFloat(), 150f, fill)
-        drawText(c, typeWord(s), 36f, 105f, 76f, s.accent, Paint.Align.LEFT)
-        drawText(c, "%.2f km".format(s.run.distanceM / 1000 * progress), W - 36f, 105f, 64f, align = Paint.Align.RIGHT)
+        drawLatin(c, typeWord(s), 36f, 118f, 100f, if (s.run.type == "TRAIL") SIGNAL else BG)
+        drawLatin(c, "%.2f KM".format(s.run.distanceM / 1000 * progress), W - 36f, 112f, 72f, BG, Paint.Align.RIGHT, heavy = false)
 
         // トレイルのときは、標高のグラフも一緒に伸ばす
         if (s.run.type == "TRAIL" && s.elevation.size >= 2) {
             val top = H - 330f
             val bottom = H - 80f
-            fill.color = Color.argb(170, 0, 0, 0)
-            c.drawRect(0f, top - 40, W.toFloat(), H.toFloat(), fill)
+            fill.color = BG; fill.alpha = 235
+            c.drawRect(0f, top - 60, W.toFloat(), H.toFloat(), fill)
             val lo = s.elevation.minOf { it.second }
             val range = (s.elevation.maxOf { it.second } - lo).coerceAtLeast(30f)
             val path = Path()
@@ -384,12 +432,13 @@ object MovieMaker {
             }
             if (count >= 2) {
                 val area = Path(path).apply { lineTo(lastX, bottom); lineTo(40f, bottom); close() }
-                fill.color = s.accent; fill.alpha = 90
+                fill.color = SIGNAL; fill.alpha = 70
                 c.drawPath(area, fill)
-                line.color = s.accent; line.strokeWidth = 6f
+                line.color = SIGNAL; line.strokeWidth = 6f
                 c.drawPath(path, line)
             }
-            drawText(c, "獲得標高 +${Math.round(s.run.gainM * progress)}m", 40f, top - 4, 34f, align = Paint.Align.LEFT)
+            drawText(c, "のぼり", 40f, top - 14, 28f, DIM, Paint.Align.LEFT)
+            drawLatin(c, "+${Math.round(s.run.gainM * progress)} M", 140f, top - 10, 50f, INK, heavy = false)
         }
         // 地図の出典（国土地理院の決まり）
         fill.color = Color.argb(200, 255, 255, 255)
@@ -409,11 +458,11 @@ object MovieMaker {
         c.drawBitmap(bmp, null, RectF((W - dw) / 2, (H - dh) / 2, (W + dw) / 2, (H + dh) / 2), Paint(Paint.FILTER_BITMAP_FLAG))
         // 声のメモを、字幕のように出す
         if (s.caption.isNotEmpty()) {
-            val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 44f; typeface = Typeface.DEFAULT_BOLD }
+            val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = BG; textSize = 44f; typeface = Typeface.DEFAULT_BOLD }
             val layout = StaticLayout.Builder.obtain(s.caption, 0, s.caption.length, tp, W - 96)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER).setMaxLines(3).setEllipsize(android.text.TextUtils.TruncateAt.END).build()
             val top = H - 160f - layout.height
-            fill.color = Color.argb(150, 0, 0, 0)
+            fill.color = INK; fill.alpha = 215
             c.drawRect(0f, top - 30, W.toFloat(), H.toFloat(), fill)
             c.save()
             c.translate(48f, top)
@@ -424,21 +473,25 @@ object MovieMaker {
 
     private fun drawStats(c: Canvas, s: Scene, t: Double) {
         c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.72f, H * 0.2f, rings = 9)
         val a = ((t - MovieScript.STATS_START) / 0.4).coerceIn(0.0, 1.0)
         val alpha = (a * 255).toInt()
         val run = s.run
-        drawText(c, typeWord(s), W / 2f, 250f, 70f, s.accent, alpha = alpha)
-        drawText(c, "%.2f".format(run.distanceM / 1000), W / 2f, 520f, 230f, alpha = alpha)
-        drawText(c, "km", W / 2f, 590f, 50f, Color.LTGRAY, alpha = alpha)
+        drawLatin(c, typeWord(s), 48f, 250f, 120f, s.accent, alpha = alpha)
+        drawLatin(c, "%.2f".format(run.distanceM / 1000), 40f, 560f, 330f, INK, alpha = alpha)
+        drawLatin(c, "KM", 52f, 640f, 64f, INK, heavy = false, alpha = alpha)
+        fill.color = INK; fill.alpha = alpha
+        c.drawRect(48f, 690f, W - 48f, 696f, fill)
         val pace = if (run.distanceM > 10) run.movingMs / 1000.0 / (run.distanceM / 1000.0) else null
-        val cols = listOf("タイム" to Fmt.clock(run.movingMs), "平均ペース" to Fmt.pace(pace), "獲得標高" to "+${Math.round(run.gainM)}m")
+        val cols = listOf("タイム" to Fmt.clock(run.movingMs), "ペース /km" to Fmt.pace(pace), "のぼり" to "+${Math.round(run.gainM)}M")
         cols.forEachIndexed { i, (label, value) ->
-            val x = W * (i + 0.5f) / cols.size
-            drawText(c, value, x, 780f, 62f, alpha = alpha)
-            drawText(c, label, x, 830f, 30f, Color.LTGRAY, alpha = alpha)
+            val x = 48f + i * (W - 96f) / cols.size
+            drawText(c, label, x, 742f, 26f, DIM, Paint.Align.LEFT, alpha = alpha)
+            drawLatin(c, value, x, 812f, 62f, INK, heavy = false, alpha = alpha)
         }
-        drawText(c, "今月 ${Math.round(s.monthKm)}km", W / 2f, 1010f, 44f, s.accent, alpha = alpha)
-        drawText(c, "Chill Run", W / 2f, H - 90f, 34f, Color.GRAY, alpha = alpha)
+        drawText(c, "今月", 48f, 930f, 30f, DIM, Paint.Align.LEFT, alpha = alpha)
+        drawLatin(c, "${Math.round(s.monthKm)} KM", 48f, 1000f, 72f, SIGNAL, heavy = false, alpha = alpha)
+        drawLatin(c, "CHILL RUN", 48f, H - 80f, 32f, DIM, heavy = false, spacing = 0.12f, alpha = alpha)
     }
 
     // ---------- 動画に固める ----------
