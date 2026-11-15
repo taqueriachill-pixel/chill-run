@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import com.chill.run.core.Fmt
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.selected
@@ -156,6 +157,30 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
         } else {
+            // 1時間以内に終えたランがあれば、その続きとして走れる（終わったら1本につながる）
+            val recent by remember { AppDb.get(context).runDao().observeRuns() }.collectAsState(initial = emptyList())
+            val last = recent.filter { it.endTime > 0 }.maxByOrNull { it.endTime }
+            if (last != null && System.currentTimeMillis() - last.endTime < 60 * 60_000L) {
+                Row(
+                    Modifier.fillMaxWidth().border(2.dp, Palette.earth).clickable {
+                        settings.continueOfRunId = last.id
+                        type = if (last.type == "TRAIL") RunType.TRAIL else RunType.ROAD
+                        startRun()
+                    }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("さっきのランの続きを走る", color = Palette.earth, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                        Text(
+                            "${formatDate(last.startTime)} から ${Fmt.km(last.distanceM)}km。終わると1本の記録につながります",
+                            color = Palette.dim, fontSize = 12.sp,
+                        )
+                    }
+                    Display("→", 34, color = Palette.earth)
+                }
+            }
+
             // ロードかトレイルか（大きな2つの札。選んだほうが塗られる）
             TypeTile("ROAD", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
             TypeTile("TRAIL", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }

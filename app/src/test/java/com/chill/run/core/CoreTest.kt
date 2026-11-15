@@ -339,6 +339,32 @@ class CoreTest {
         assertEquals(null, judge(0.0, null, null))
     }
 
+    // ---- 記録をつなげる ----
+    @Test
+    fun merge_shifts_second_run_and_rebuilds_splits() {
+        // 前の記録：1.5km を 9分（6:00/km）、高さは 10m で平ら
+        val a = (0..15).map { MPoint(it * 36_000L, it * 100.0, it * 36_000L, 10.0, 150, 170) }
+        // あとの記録：0.8km を 4分、自分のはじめから数えた距離と時間。高さの合わせ方が 5m 違う
+        val b = (0..8).map { MPoint(2_000_000L + it * 30_000L, it * 100.0, it * 30_000L, 15.0 + it, 160, 180) }
+        val moved = RunMerge.shift(b, 1500.0, 540_000L, -5.0)
+        assertEquals(1500.0, moved.first().distM, 0.0)
+        assertEquals(540_000L, moved.first().movingMs)
+        assertEquals(10.0, moved.first().alt!!, 1e-9)
+        val splits = RunMerge.splits(a + moved)
+        assertEquals(listOf(1, 2, 3), splits.map { it.idx })
+        assertEquals(1000.0, splits[0].distanceM, 1e-6)
+        assertEquals(360_000L, splits[0].movingMs)
+        // 2km め：前の 0.5km（3分）＋あとの 0.5km（2.5分）
+        assertEquals(330_000L, splits[1].movingMs)
+        assertEquals(300.0, splits[2].distanceM, 1e-6)
+        // あとの記録の上り 8m のうち、3m ずつ数えた分（3m＋3m）が登りに入る
+        assertEquals(6.0, splits.sumOf { it.gainM }, 1e-9)
+        assertEquals(170, splits[0].steps / 6)  // 170歩/分 × 6分 ＝ 1020歩
+        assertEquals(155, splits[1].avgHr)      // 150 が 3分、160 が 2.5分 → 約155
+        assertEquals(153, RunMerge.avgHr(150, 540_000L, 160, 240_000L))
+        assertEquals(160, RunMerge.avgHr(0, 540_000L, 160, 240_000L))
+    }
+
     // ---- 週の目標・続いた週・レベル ----
     private val tokyo = java.time.ZoneId.of("Asia/Tokyo")
     private fun at(y: Int, m: Int, d: Int, h: Int = 7) = java.time.LocalDateTime.of(y, m, d, h, 0).atZone(tokyo).toInstant().toEpochMilli()

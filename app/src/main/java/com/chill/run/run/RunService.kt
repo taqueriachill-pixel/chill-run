@@ -49,6 +49,7 @@ import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
+import com.chill.run.data.MergeRuns
 import com.chill.run.data.PhraseStore
 import com.chill.run.data.PointEntity
 import com.chill.run.data.PostRun
@@ -110,6 +111,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     // 声のメモ
     private val recorder = MemoRecorder()
+    /** つなげる先の記録の番号（0 ならつなげない） */
+    private var continueOf = 0L
     private var micReady = false
     private var lastLat: Double? = null
     private var lastLon: Double? = null
@@ -187,6 +190,9 @@ class RunService : Service(), SensorEventListener, LocationListener {
             cooldownSec = intent.getIntExtra(EXTRA_COOLDOWN, 0),
         ) else null
         val aim = if (plan == null) intent.getStringExtra(EXTRA_AIM).orEmpty() else ""
+        // 「さっきのランの続きを走る」で始めたときは、終わったら前の記録につなげる
+        continueOf = settings.continueOfRunId
+        settings.continueOfRunId = 0L
         config = settings.runConfig(type, goalKind, goalValue, hasBarometer, plan, aim)
         val t = RunTracker(config)
         tracker = t
@@ -566,8 +572,11 @@ class RunService : Service(), SensorEventListener, LocationListener {
         val offset = if (altOffset.isNaN()) 0.0 else altOffset
         val altSource = startAltSource
         val dispatcher = dbDispatcher
+        val joinTo = continueOf
+        continueOf = 0L
         app.scope.launch {
-            val id = idDeferred.await()
+            val savedId = idDeferred.await()
+            val id = savedId
             val dao = AppDb.get(context).runDao()
             // 先に出した地点の保存が終わるのを待ってから仕上げる
             withContext(dispatcher) {
@@ -601,19 +610,23 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 }
             }
             // 地図用の下ごしらえ、いつものコース、ロードかトレイルかの判定
-            if (keep) runCatching { withContext(dispatcher) { PostRun.analyze(context, id) } }
+            if (keep && joinTo <= 0) runCatching { withContext(dispatcher) { PostRun.analyze(context, savedId) } }
             // リアルタイムで心拍数が取れなかったときは、ヘルスコネクトにあれば取り込む（なければ何もしない）
-            if (keep && t.maxHr == 0) runCatching { HrImport.apply(context, id) }
+            if (keep && t.maxHr == 0) runCatching { HrImport.apply(context, savedId) }
             // ヘルスコネクトへの書き込みは数秒だけ待つ（遅いときは待たずに記録の画面へ進む）
-            val hcJob = if (keep) launch { runCatching { Health.writeRun(context, id) } } else null
+            val hcJob = if (keep) launch { runCatching { Health.writeRun(context, savedId) } } else null
             withTimeoutOrNull(4000) { hcJob?.join() }
-            RunHub.state.value = LiveState(finishedRunId = if (keep) id else -1)
+            // 続きとして走ったときは、前の記録につなげる（つなげたあとの記録を開く）
+            val finalId = if (keep && joinTo > 0) {
+                withContext(dispatcher) { runCatching { MergeRuns.merge(context, joinTo, savedId) }.getOrDefault(savedId) }
+            } else savedId
+            RunHub.state.value = LiveState(finishedRunId = if (keep) finalId else -1)
             // 地図で道の種類（未舗装かどうか）を調べて、トレイルの判定をやり直す（通信できなければ、記録の画面を開いたときにもう一度）
-            if (keep) launch { runCatching { PostRun.checkSurface(context, id) } }
+            if (keep) launch { runCatching { PostRun.checkSurface(context, finalId) } }
             // 天気と気温を調べておく（ランムービーの曲づくりに使う。通信できなければ何もしない）
-            if (keep && !autoMovie) launch { runCatching { Weather.ensureForRun(context, id) } }
+            if (keep && !autoMovie) launch { runCatching { Weather.ensureForRun(context, finalId) } }
             // 設定で「自動で作る」にしてあれば、ランムービーを作っておく（数十秒かかるので、画面は先に進める）
-            if (keep && autoMovie) launch { runCatching { MovieMaker.make(context, id) } }
+            if (keep && autoMovie) launch { runCatching { MovieMaker.make(context, finalId) } }
             delay(8000)
             sp?.shutdown()
         }

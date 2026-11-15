@@ -209,6 +209,9 @@ interface RunDao {
     @Insert
     suspend fun insertPoint(point: PointEntity)
 
+    @Insert
+    suspend fun insertPoints(points: List<PointEntity>)
+
     @Query("SELECT * FROM points WHERE runId = :runId ORDER BY time, id")
     suspend fun points(runId: Long): List<PointEntity>
 

@@ -49,6 +49,7 @@ import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
+import com.chill.run.data.MergeRuns
 import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
 import com.chill.run.data.Settings
@@ -82,13 +83,17 @@ private fun steepPercentOf(points: List<PointEntity>): Int? {
 }
 
 @Composable
-fun DetailScreen(runId: Long, onBack: () -> Unit) {
+fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}) {
     val context = LocalContext.current
     val dao = remember { AppDb.get(context).runDao() }
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<DetailData?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // ほかの記録とつなげる
+    var mergeCandidates by remember { mutableStateOf<List<RunEntity>?>(null) }
+    var mergeWith by remember { mutableStateOf<RunEntity?>(null) }
+    var merging by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
@@ -646,6 +651,28 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
             }
             SmallButton("この記録を消す", Modifier.weight(1f)) { confirmDelete = true }
         }
+
+        // 終了してしまったあとに続きを走ったときなどに、前後の記録と1つにまとめる
+        Card {
+            SectionTitle("ほかの記録とつなげる")
+            Text("間違えて終了したときや、休んでから続きを走ったときに、前後12時間以内の記録と1本にまとめます。", color = Palette.dim, fontSize = 13.sp)
+            val list = mergeCandidates
+            if (merging) {
+                Text("つなげています…", color = Palette.text, fontSize = 15.sp)
+            } else if (list == null) {
+                SmallButton("つなげる記録をさがす", Modifier.fillMaxWidth()) {
+                    scope.launch { mergeCandidates = withContext(Dispatchers.IO) { MergeRuns.candidates(context, runId) } }
+                }
+            } else if (list.isEmpty()) {
+                Text("前後12時間以内に、ほかの記録はありません。", color = Palette.dim, fontSize = 14.sp)
+            } else {
+                list.forEach { other ->
+                    val label = (if (other.startTime < r.startTime) "前：" else "あと：") + formatDate(other.startTime) +
+                        "　${typeLabel(other.type)}　${Fmt.km(other.distanceM)}km　${Fmt.clock(other.movingMs)}"
+                    SmallButton(label, Modifier.fillMaxWidth()) { mergeWith = other }
+                }
+            }
+        }
         Gap(24)
     }
 
@@ -711,6 +738,35 @@ fun DetailScreen(runId: Long, onBack: () -> Unit) {
                 }) { Text("決定") }
             },
             dismissButton = { TextButton(onClick = { renaming = false }) { Text("やめる") } },
+        )
+    }
+
+    mergeWith?.let { other ->
+        AlertDialog(
+            onDismissRequest = { mergeWith = null },
+            title = { Text("この2つの記録をつなげますか？") },
+            text = {
+                Text(
+                    "${formatDate(minOf(r.startTime, other.startTime))} からの1本の記録になります。" +
+                        "距離・時間・登りは足し合わせ、1km ごとの区切りは作り直します。メモ・写真・動画も1つにまとまります。\n\n" +
+                        "あとの記録は消えて、元に戻せません。ランムービーは作り直しになります。" +
+                        "（ヘルスコネクトに書き込んだ分は、2つのまま残ります）",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    mergeWith = null
+                    merging = true
+                    scope.launch {
+                        val kept = withContext(Dispatchers.IO) { runCatching { MergeRuns.merge(context, runId, other.id) } }
+                        merging = false
+                        mergeCandidates = null
+                        kept.onSuccess { id -> if (id == runId) reload++ else onOpenRun(id) }
+                            .onFailure { message = "つなげられませんでした：${it.message}" }
+                    }
+                }) { Text("つなげる") }
+            },
+            dismissButton = { TextButton(onClick = { mergeWith = null }) { Text("やめる") } },
         )
     }
 

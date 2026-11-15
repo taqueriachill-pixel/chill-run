@@ -113,6 +113,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("videoStabilize", true)
         set(v) = p.edit().putBoolean("videoStabilize", v).apply()
 
+    /** 次に始めるランを、この記録の続きとしてつなげる（0 ならつなげない）。始めたら 0 に戻す */
+    var continueOfRunId: Long
+        get() = p.getLong("continueOfRunId", 0L)
+        set(v) = p.edit().putLong("continueOfRunId", v).apply()
+
     /** 撮影でインカメラを使うか（撮影画面で切り替えると、次もその向きで開く） */
     var frontCamera: Boolean
         get() = p.getBoolean("frontCamera", false)

@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
                         r.startsWith("detail/") -> DetailScreen(
                             runId = r.removePrefix("detail/").toLongOrNull() ?: 0,
                             onBack = { route = "history" },
+                            onOpenRun = { route = "detail/$it" },
                         )
                         r == "settings" -> SettingsScreen(onBack = { route = "home" }, onNavigate = { route = it })
                         r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
