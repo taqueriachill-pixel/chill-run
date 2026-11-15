@@ -37,6 +37,19 @@
     → チャンネルを `run_live`（重要度「中」・音とバイブなし）に作り直し、古い `run` を消した。Android 16 のライブ アップデート
     （`android.requestPromotedOngoing` と `POST_PROMOTED_NOTIFICATIONS`、`setShortCriticalText` は反射で呼ぶ）も頼んでいる。v0.7.25。実機で未確認。
 
+- **見た目は H（アウトドア誌）に決定（2026-11-15）、作り替えた（ブランチ `outdoor-look`、版 0.8.x）。**
+  - 色：紙 #F3EFE6、カード #FBF9F4、線 #D8CFBD、文字 #1F2A21、説明 #6C6556、ロード＝深い緑 #2D3A2E、トレイル＝信号オレンジ #E8571E。
+    オレンジの上の文字は濃い色（`Palette.on`）。角はほぼ四角（4dp）。
+  - 書体：数字と英字は Archivo（幅を変えられる書体。`res/font/archivo.ttf`、SIL OFL、`docs/licenses/Archivo-OFL.txt`）を
+    幅62%の極太（`Type.condensed`）と幅75%（`Type.narrow`）で使う。日本語は端末の標準（Noto Sans CJK）。
+  - 共通部品（`ui/Outdoor.kt`）：等高線の飾り `Topo`、ルートの形だけ描く `RouteSketch`、太い線の下に数字を並べる `FigureRow`、`LevelBar`、
+    `rememberProgress()`（全記録から計算）。`ui/Theme.kt` に `Display`（大きな数字）と `Rule`（線）。
+  - ホーム：等高線＋「GO OUT SIDE.」、今週・れんぞく・レベル、ROAD/TRAIL の大きな札、メニューなど、スタート。
+    走行中：上が深い緑（等高線＋走ったルートの形＋状態）、下が紙（大きな距離、タイム・ペース・心拍、メモ/写真/動画、長押しの一時停止/終了）。
+    記録：見出し（種類と距離）＋数字の行＋「けいけんち」の内わけ。きろく：今月の距離・回数・今週・れんぞく。
+  - 週の目標とレベルの計算は `core/Progress.kt`（テストあり）。DB は変えず、毎回すべての記録から計算する。設定に「今週のもくひょう」（週1〜4日）。
+  - ランムービーの色（青と緑）は、まだ前のまま。
+
 ## これまでの状態（2026-11-12）
 
 - **段階1（記録の土台）は作り終え、室内での確認は済んだ。外での試し走りはまだ。**
