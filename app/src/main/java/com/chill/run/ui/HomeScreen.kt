@@ -112,18 +112,20 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // 見出し：等高線の上に、大きな言葉
-        Box(Modifier.fillMaxWidth().height(if (live.active) 150.dp else 300.dp)) {
+        // 見出し：等高線の上に、大きな言葉（枠の高さは文字に合わせて伸びる）
+        Box(Modifier.fillMaxWidth()) {
             Topo(Modifier.matchParentSize(), Color(0xFFB9AE97))
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("CHILL RUN", color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp)
-                Text(
-                    today.format(java.time.format.DateTimeFormatter.ofPattern("MMM d · EEE", java.util.Locale.ENGLISH)).uppercase(),
-                    color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp,
-                )
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("CHILL RUN", color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp)
+                    Text(
+                        today.format(java.time.format.DateTimeFormatter.ofPattern("MMM d · EEE", java.util.Locale.ENGLISH)).uppercase(),
+                        color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp,
+                    )
+                }
+                if (!live.active) Display("GO\nOUT\nSIDE.", 104, Modifier.padding(top = 28.dp, bottom = 16.dp), color = Palette.earth)
+                else Display("ON THE\nRUN.", 64, Modifier.padding(top = 24.dp, bottom = 12.dp), color = Palette.earth)
             }
-            if (!live.active) Display("GO\nOUT\nSIDE.", 108, Modifier.padding(top = 48.dp), color = Palette.earth)
-            else Display("ON THE\nRUN.", 64, Modifier.padding(top = 40.dp), color = Palette.earth)
         }
 
         // 今週・続いた週・レベル
