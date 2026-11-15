@@ -4,6 +4,7 @@ import kotlinx.coroutines.delay
 import com.chill.run.data.PostRun
 import com.chill.run.core.RouteAnalysis
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +42,13 @@ import androidx.compose.ui.unit.sp
 import com.chill.run.core.AnnounceText
 import com.chill.run.core.Fmt
 import com.chill.run.core.HeartZones
+import java.time.ZoneId
+import java.time.Instant
+import androidx.compose.foundation.layout.width
+import com.chill.run.core.Advice
+import com.chill.run.core.PastRun
+import com.chill.run.core.TodayRun
+import com.chill.run.core.Coach
 import com.chill.run.core.PhaseKind
 import com.chill.run.core.Sky
 import com.chill.run.core.TuneMood
@@ -241,6 +250,47 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
                 }
                 val after = progress.levelAfter[r.id]
                 if (after != null) Text("このランのあと：レベル $after", color = Palette.dim, fontSize = 13.sp)
+            }
+        }
+
+        // きょうのふりかえり（数字から、よかった点・次へのヒント・休み方）
+        val allRuns by remember { dao.observeRuns() }.collectAsState(initial = emptyList())
+        val advice = remember(r, d.splits, allRuns, progress) {
+            val pts = d.points
+            val zoneShare = if (r.maxHr > 0 && pts.any { it.hr != null }) {
+                val ms = zoneTimes(pts, HeartZones(settings.maxHr, settings.restHr))
+                val sum = ms.sum().toDouble()
+                if (sum > 0) DoubleArray(6) { ms[it] / sum } else null
+            } else null
+            val cads = pts.mapNotNull { it.cadence }.filter { it > 0 }
+            val zone = ZoneId.systemDefault()
+            Coach.advise(
+                TodayRun(
+                    startMs = r.startTime, trail = r.type == "TRAIL", interval = r.goalKind == "INTERVAL",
+                    distanceM = r.distanceM, movingMs = r.movingMs, gainM = r.gainM,
+                    splitSec = d.splits.filter { it.distanceM >= 990 }.map { it.movingMs / 1000.0 },
+                    cadence = if (cads.size > 20) cads.average().toInt() else null,
+                    zoneShare = zoneShare, condition = r.condition, courseId = r.courseId,
+                    newBests = exp?.bestNames ?: emptyList(),
+                    weekGoalDone = (exp?.weekGoal ?: 0) > 0, streakWeeks = exp?.streakWeeks ?: 0,
+                ),
+                allRuns.filter { it.id != r.id && it.endTime > 0 }.map { PastRun(it.startTime, it.distanceM, it.movingMs, it.courseId) },
+            ) { ms -> Instant.ofEpochMilli(ms).atZone(zone).toLocalDate().toEpochDay() }
+        }
+        if (advice.isNotEmpty()) Card {
+            SectionTitle("きょうのふりかえり")
+            advice.forEach { a ->
+                val color = when (a.kind) { Advice.Kind.GOOD -> Palette.earth; Advice.Kind.TIP -> Palette.warn; Advice.Kind.CARE -> Palette.signal }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.padding(top = 4.dp).width(4.dp).height(36.dp).background(color))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            (when (a.kind) { Advice.Kind.GOOD -> "よかった　"; Advice.Kind.TIP -> "次は　"; Advice.Kind.CARE -> "体を大事に　" }) + a.title,
+                            color = color, fontSize = 15.sp, fontWeight = FontWeight.Black,
+                        )
+                        Text(a.text, color = Palette.text, fontSize = 14.sp)
+                    }
+                }
             }
         }
 
@@ -650,6 +700,16 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
                 setType(r, d.course, if (r.type == "TRAIL") "ROAD" else "TRAIL")
             }
             SmallButton("この記録を消す", Modifier.weight(1f)) { confirmDelete = true }
+        }
+
+        // 履いたシューズ（あとから変えられる）
+        val shoes by remember { dao.observeShoes() }.collectAsState(initial = emptyList())
+        val shoeKms by remember { dao.observeShoeKm() }.collectAsState(initial = emptyList())
+        if (shoes.isNotEmpty()) Card {
+            SectionTitle("シューズ")
+            ShoePicker(shoes, shoeKms, r.shoeId, r.type) { id ->
+                scope.launch { withContext(Dispatchers.IO) { dao.setShoe(r.id, id) }; reload++ }
+            }
         }
 
         // 終了してしまったあとに続きを走ったときなどに、前後の記録と1つにまとめる

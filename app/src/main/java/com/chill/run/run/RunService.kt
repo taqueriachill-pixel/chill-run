@@ -24,6 +24,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.widget.RemoteViews
 import android.os.VibrationEffect
 import android.os.Vibrator
 import com.chill.run.App
@@ -164,6 +165,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
             ACTION_RESUME -> setPaused(false)
             ACTION_FINISH -> finishRun()
             ACTION_MEMO -> toggleMemo()
+            ACTION_SPEAK -> speakStatus()
             ACTION_MUSIC_TOGGLE -> { music?.togglePause(); publish() }
             ACTION_MUSIC_NEXT -> { music?.next(); publish() }
             else -> {}
@@ -226,6 +228,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                     goalValue = goalValue,
                     elevationSource = elevationSource,
                     aim = aim,
+                    shoeId = settings.shoeFor(type.name),
                 )
             )
             runId.complete(id)
@@ -708,26 +711,49 @@ class RunService : Service(), SensorEventListener, LocationListener {
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
             .apply {
-                // Android 16 の「ライブ アップデート」：記録中の通知を、ロック画面やステータスバーの上のほうに優先して出してもらう。
-                // 対応していない端末では、ただ無視される
-                extras.putBoolean("android.requestPromotedOngoing", true)
-                if (t != null) runCatching {
-                    // ステータスバーの小さな欄に出す短い文字（例：5.2 km）
-                    Notification.Builder::class.java.getMethod("setShortCriticalText", String::class.java)
-                        .invoke(this, "${Fmt.km(t.distanceM)} km")
-                }
-                // 通知の欄にも「メモ」「写真」「動画」のボタンを並べる
+                // ロック画面からも押せる4つのボタン（読み上げ・メモ・写真・動画）。
+                // ふつうの通知のボタンは3つまでなので、ボタンの並びを自分で作って載せる
                 if (t != null) {
                     val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    val speak = PendingIntent.getService(this@RunService, 4, Intent(this@RunService, RunService::class.java).setAction(ACTION_SPEAK), flags)
                     val memo = PendingIntent.getService(this@RunService, 1, Intent(this@RunService, RunService::class.java).setAction(ACTION_MEMO), flags)
                     val photo = PendingIntent.getActivity(this@RunService, 2, CaptureActivity.intent(this@RunService, video = false), flags)
                     val video = PendingIntent.getActivity(this@RunService, 3, CaptureActivity.intent(this@RunService, video = true), flags)
-                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_mic), if (recorder.recording) "録音を止める" else "メモ", memo).build())
-                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_camera), "写真", photo).build())
-                    addAction(Notification.Action.Builder(Icon.createWithResource(this@RunService, R.drawable.ic_act_video), "動画", video).build())
+                    fun buttons(layout: Int) = RemoteViews(packageName, layout).apply {
+                        setOnClickPendingIntent(R.id.n_speak, speak)
+                        setOnClickPendingIntent(R.id.n_memo, memo)
+                        setOnClickPendingIntent(R.id.n_photo, photo)
+                        setOnClickPendingIntent(R.id.n_video, video)
+                        if (recorder.recording) {
+                            setTextViewText(R.id.n_memo, "録音停止")
+                            setInt(R.id.n_memo, "setBackgroundResource", R.drawable.notif_btn_on)
+                        }
+                    }
+                    val big = buttons(R.layout.notif_big).apply {
+                        setTextViewText(R.id.n_title, title)
+                        setTextViewText(R.id.n_text, text)
+                    }
+                    setStyle(Notification.DecoratedCustomViewStyle())
+                    setCustomContentView(buttons(R.layout.notif_buttons))
+                    setCustomBigContentView(big)
+                    setCustomHeadsUpContentView(buttons(R.layout.notif_buttons))
                 }
             }
             .build()
+    }
+
+    /** いまの状況を声で伝える（ロック画面の「読み上げ」や、走っている画面のボタンから） */
+    private fun speakStatus() {
+        val t = tracker ?: return
+        val now = SystemClock.elapsedRealtime()
+        val hr = t.currentHr(now)
+        val textNow = AnnounceText.status(
+            distM = t.distanceM, movingSec = t.movingMs / 1000, avgPace = t.averagePace(),
+            pace = if (t.isPaused) null else t.currentPace(), hr = hr, zone = hr?.let { t.zones.zoneOf(it) },
+            gainM = if (config.type == RunType.TRAIL) t.gainM else null,
+        )
+        val sp = speaker ?: Speaker(this, settings.ttsRate, settings.ttsVolume).also { speaker = it }
+        sp.say(textNow, flush = true)
     }
 
     private fun updateNotification() {
@@ -770,6 +796,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         const val ACTION_RESUME = "com.chill.run.RESUME"
         const val ACTION_FINISH = "com.chill.run.FINISH"
         const val ACTION_MEMO = "com.chill.run.MEMO"
+        const val ACTION_SPEAK = "com.chill.run.SPEAK"
         const val ACTION_MUSIC_TOGGLE = "com.chill.run.MUSIC_TOGGLE"
         const val ACTION_MUSIC_NEXT = "com.chill.run.MUSIC_NEXT"
         private const val MEMO_MAX_MS = 60_000L

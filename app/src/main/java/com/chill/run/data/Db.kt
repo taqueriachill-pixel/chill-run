@@ -76,6 +76,9 @@ data class RunEntity(
     // ---- ここから、未舗装の道の判定のために追加 ----
     /** 未舗装の道を通った割合（0〜1）。まだ調べていなければ null、調べたが分からなければ -1 */
     val unpavedFraction: Double? = null,
+    // ---- ここから、シューズのために追加 ----
+    /** 履いたシューズ（0 なら選んでいない） */
+    @ColumnInfo(defaultValue = "0") val shoeId: Long = 0,
 )
 
 /** いつものコース */
@@ -170,6 +173,25 @@ data class MediaEntity(
 /** ふりかえり用の、1km ごとの記録の抜き出し */
 data class HrSplit(val movingMs: Long, val avgHr: Int, val startTime: Long)
 
+/** シューズ（2026-11-15 に追加）。走った距離は、記録から足し合わせる */
+@Entity(tableName = "shoes")
+data class ShoeEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** "ROAD"・"TRAIL"・""（どちらでも） */
+    val kind: String = "",
+    /** 登録する前に、すでに走っていた距離（km） */
+    val startKm: Double = 0.0,
+    /** 買い替えの目安（km） */
+    val limitKm: Double = 700.0,
+    /** 引退させたか（引退したシューズは選ぶ一覧に出さない） */
+    val retired: Boolean = false,
+    val createdAt: Long = 0,
+)
+
+/** シューズごとの走った距離 */
+data class ShoeKm(val shoeId: Long, val km: Double, val runs: Int, val lastUsed: Long)
+
 /** 音楽の曲（段階5で追加） */
 @Entity(tableName = "tracks", indices = [Index(value = ["uri"], unique = true)])
 data class TrackEntity(
@@ -211,6 +233,31 @@ interface RunDao {
 
     @Insert
     suspend fun insertPoints(points: List<PointEntity>)
+
+    // ---- シューズ ----
+    @Insert
+    suspend fun insertShoe(shoe: ShoeEntity): Long
+
+    @Update
+    suspend fun updateShoe(shoe: ShoeEntity)
+
+    @Query("SELECT * FROM shoes ORDER BY retired, createdAt DESC")
+    fun observeShoes(): Flow<List<ShoeEntity>>
+
+    @Query("SELECT * FROM shoes ORDER BY retired, createdAt DESC")
+    suspend fun shoes(): List<ShoeEntity>
+
+    @Query("SELECT shoeId, SUM(distanceM) / 1000.0 AS km, COUNT(*) AS runs, MAX(startTime) AS lastUsed FROM runs WHERE shoeId > 0 AND endTime > 0 GROUP BY shoeId")
+    fun observeShoeKm(): Flow<List<ShoeKm>>
+
+    @Query("UPDATE runs SET shoeId = :shoeId WHERE id = :runId")
+    suspend fun setShoe(runId: Long, shoeId: Long)
+
+    @Query("UPDATE runs SET shoeId = 0 WHERE shoeId = :shoeId")
+    suspend fun clearShoe(shoeId: Long)
+
+    @Query("DELETE FROM shoes WHERE id = :id")
+    suspend fun deleteShoe(id: Long)
 
     @Query("SELECT * FROM points WHERE runId = :runId ORDER BY time, id")
     suspend fun points(runId: Long): List<PointEntity>
@@ -362,9 +409,9 @@ suspend fun RunDao.deleteRun(runId: Long) {
 @Database(
     entities = [
         RunEntity::class, PointEntity::class, SplitEntity::class, CourseEntity::class, LapEntity::class,
-        IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class,
+        IntervalMenuEntity::class, MediaEntity::class, TrackEntity::class, ShoeEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class AppDb : RoomDatabase() {
@@ -376,7 +423,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "chillrun.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build().also { instance = it }
         }
     }
@@ -428,5 +475,12 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
 val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(db: SupportSQLiteDatabase) {
         MigrationSql.V7_TO_8.forEach { db.execSQL(it) }
+    }
+}
+
+/** シューズの表と、ランに履いたシューズの項目を足す */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        MigrationSql.V8_TO_9.forEach { db.execSQL(it) }
     }
 }

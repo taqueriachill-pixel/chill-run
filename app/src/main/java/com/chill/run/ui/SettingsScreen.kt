@@ -138,6 +138,10 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
         ScreenHeader("設定", onBack)
 
         Card {
+            SectionTitle("シューズ")
+            SmallButton("シューズの登録と距離", Modifier.fillMaxWidth()) { onNavigate("shoes") }
+        }
+        Card {
             SectionTitle("今週のもくひょう")
             Text("1週間（月曜〜日曜）に走る日数。達成すると経験値 ＋30。達成した週が続くと、さらにボーナスが入ります。届かない週があっても、続いた数は1つ減るだけです。", color = Palette.dim, fontSize = 13.sp)
             Stepper(

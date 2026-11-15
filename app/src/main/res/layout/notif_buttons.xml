@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 記録中の通知（たたんだとき）：4つのボタンだけ。ロック画面からも押せる -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal">
+
+    <TextView android:id="@+id/n_speak" style="@style/NotifButton" android:text="読み上げ" />
+    <TextView android:id="@+id/n_memo" style="@style/NotifButton" android:text="メモ" />
+    <TextView android:id="@+id/n_photo" style="@style/NotifButton" android:text="写真" />
+    <TextView android:id="@+id/n_video" style="@style/NotifButton" android:text="動画" />
+</LinearLayout>

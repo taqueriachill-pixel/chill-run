@@ -31,6 +31,7 @@ import com.chill.run.ui.Palette
 import com.chill.run.ui.PermissionsScreen
 import com.chill.run.ui.ReviewScreen
 import com.chill.run.ui.SettingsScreen
+import com.chill.run.ui.ShoesScreen
 
 class MainActivity : ComponentActivity() {
     /** いま出している画面。"home" "history" "detail/12" "settings" "permissions" "check" */
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
                         r == "mapsave" -> MapSaveScreen(onBack = { route = "settings" })
                         r == "hrdevice" -> HrDeviceScreen(onBack = { route = "settings" })
                         r == "music" -> MusicScreen(onBack = { route = "home" })
+                        r == "shoes" -> ShoesScreen(onBack = { route = "home" })
                         r == "review" -> ReviewScreen(onBack = { route = "home" }, onOpen = { route = "detail/$it" })
                         r == "hide" -> HideScreen(onBack = { route = "settings" })
                         r.startsWith("interval/") -> IntervalScreen(

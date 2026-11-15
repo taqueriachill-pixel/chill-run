@@ -78,4 +78,12 @@ object MigrationSql {
     val V7_TO_8 = listOf(
         "ALTER TABLE `runs` ADD COLUMN `unpavedFraction` REAL",
     )
+
+    /** 版8 までの runs 表にある項目 */
+    val RUNS_V8_COLUMNS = RUNS_V7_COLUMNS + setOf("unpavedFraction")
+
+    val V8_TO_9 = listOf(
+        "ALTER TABLE `runs` ADD COLUMN `shoeId` INTEGER NOT NULL DEFAULT 0",
+        "CREATE TABLE IF NOT EXISTS `shoes` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `kind` TEXT NOT NULL, `startKm` REAL NOT NULL, `limitKm` REAL NOT NULL, `retired` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)",
+    )
 }

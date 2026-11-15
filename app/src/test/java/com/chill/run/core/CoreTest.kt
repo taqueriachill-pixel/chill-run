@@ -339,6 +339,56 @@ class CoreTest {
         assertEquals(null, judge(0.0, null, null))
     }
 
+    @Test
+    fun status_is_spoken_in_one_breath() {
+        val t = AnnounceText.status(3420.0, 1268, 370.0, 360.0, 152, 3, null)
+        assertTrue(t, t.startsWith("いま") && t.contains("心拍152、ゾーン3") && t.contains("平均"))
+        assertFalse(AnnounceText.status(500.0, 200, null, null, null, null, 2.0).contains("登り"))
+    }
+
+    // ---- きょうのふりかえり ----
+    private fun today(splits: List<Double>, extra: (TodayRun) -> TodayRun = { it }) = extra(
+        TodayRun(
+            startMs = 100 * 86_400_000L + 3_600_000L, trail = false, interval = false,
+            distanceM = splits.size * 1000.0, movingMs = (splits.sum() * 1000).toLong(), gainM = 0.0,
+            splitSec = splits, cadence = 172, zoneShare = null, condition = 0, courseId = 0,
+            newBests = emptyList(), weekGoalDone = false, streakWeeks = 0,
+        )
+    )
+
+    @Test
+    fun coach_praises_negative_split_and_warns_hard_days() {
+        val neg = Coach.advise(today(listOf(370.0, 365.0, 355.0, 350.0)), emptyList())
+        assertTrue(neg.any { it.title == "後半に上げられた" })
+        assertTrue(neg.size <= 4)
+        val fade = Coach.advise(today(listOf(330.0, 335.0, 360.0, 370.0)) { it.copy(cadence = 150) }, emptyList())
+        assertTrue(fade.any { it.title == "前半を少しだけ抑える" })
+        // ヒントは1つまで（ケイデンスのヒントは配分のヒントのあと）
+        assertEquals(1, fade.count { it.kind == Advice.Kind.TIP })
+        val hard = Coach.advise(today(listOf(300.0, 300.0, 300.0)) { it.copy(zoneShare = doubleArrayOf(0.0, 0.0, 0.1, 0.3, 0.4, 0.2)) }, emptyList())
+        assertEquals(Advice.Kind.CARE, hard.first().kind)
+        // よかった点が何もなくても、何か1つは返す
+        val plain = Coach.advise(today(listOf(400.0)) { it.copy(cadence = null) }, emptyList())
+        assertTrue(plain.any { it.kind == Advice.Kind.GOOD })
+    }
+
+    @Test
+    fun coach_watches_volume_and_rest() {
+        val d = 86_400_000L
+        val t = today(listOf(360.0, 360.0, 360.0, 360.0, 360.0))
+        // 前の3週は週 10km、この7日は 30km 以上
+        val past = (8..28 step 3).map { PastRun(t.startMs - it * d, 4300.0, 1_500_000, 0) } +
+            (1..3).map { PastRun(t.startMs - it * d, 9000.0, 3_000_000, 0) }
+        val a = Coach.advise(t, past)
+        assertTrue(a.first().kind == Advice.Kind.CARE)
+        // 4日つづけて走った日は、休むようにすすめる（いたわりは1つだけ出す）
+        val streak = Coach.advise(t, (1..3).map { PastRun(t.startMs - it * d, 3000.0, 1_000_000, 0) })
+        assertTrue(streak.any { it.title == "4日つづけて走っています" })
+        // 同じコースの前回より速い
+        val course = Coach.advise(t.copy(courseId = 7), listOf(PastRun(t.startMs - 5 * d, 5000.0, 5 * 375_000L, 7)))
+        assertTrue(course.any { it.title == "前回より速い" })
+    }
+
     // ---- 記録をつなげる ----
     @Test
     fun merge_shifts_second_run_and_rebuilds_splits() {

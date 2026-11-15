@@ -60,6 +60,17 @@ data class AnnounceOptions(
 )
 
 object AnnounceText {
+    /** いまの状況（「読み上げ」ボタンで、いつでも聞ける） */
+    fun status(distM: Double, movingSec: Long, avgPace: Double?, pace: Double?, hr: Int?, zone: Int?, gainM: Double?): String {
+        val sb = StringBuilder("いま")
+        sb.append(Fmt.distanceSpoken(distM)).append("、").append(Fmt.durationSpoken(movingSec)).append("。")
+        if (pace != null) sb.append("いまのペース").append(Fmt.paceSpoken(pace)).append("。")
+        if (avgPace != null) sb.append("平均").append(Fmt.paceSpoken(avgPace)).append("。")
+        if (hr != null) sb.append("心拍").append(hr).append(if (zone != null && zone >= 1) "、ゾーン$zone" else "").append("。")
+        if (gainM != null && gainM >= 3) sb.append("登り").append(Math.round(gainM)).append("メートル。")
+        return sb.toString()
+    }
+
     /** 区切りごとのお知らせ文を作る */
     fun interval(ev: TrackerEvent.Interval, config: RunConfig, opts: AnnounceOptions, phrases: PhraseBook): String {
         val sb = StringBuilder()

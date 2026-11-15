@@ -118,6 +118,10 @@ class Settings(context: Context) {
         get() = p.getLong("continueOfRunId", 0L)
         set(v) = p.edit().putLong("continueOfRunId", v).apply()
 
+    /** 次に始めるランで履くシューズ（0 なら選ばない）。ロード・トレイルそれぞれ前回のものを覚える */
+    fun shoeFor(type: String): Long = p.getLong("shoe_$type", 0L)
+    fun setShoeFor(type: String, id: Long) = p.edit().putLong("shoe_$type", id).apply()
+
     /** 撮影でインカメラを使うか（撮影画面で切り替えると、次もその向きで開く） */
     var frontCamera: Boolean
         get() = p.getBoolean("frontCamera", false)

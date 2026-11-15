@@ -21,8 +21,8 @@ import java.util.zip.ZipOutputStream
  * 声のメモ・写真・動画（入れるかどうかは選べる）をまとめる。地図の一時保存は入れない（取り直せるため）。
  */
 object Backup {
-    private val TABLES = listOf("runs", "points", "splits", "courses", "laps", "interval_menus", "media", "tracks")
-    private const val DB_VERSION = 8
+    private val TABLES = listOf("runs", "points", "splits", "courses", "laps", "interval_menus", "media", "tracks", "shoes")
+    private const val DB_VERSION = 9
 
     class Summary(val runs: Int, val files: Int)
 

@@ -91,6 +91,7 @@ class RunActivity : ComponentActivity() {
                     },
                     onFinish = { RunService.send(this, RunService.ACTION_FINISH) },
                     onMemo = { RunService.send(this, RunService.ACTION_MEMO) },
+                    onSpeak = { RunService.send(this, RunService.ACTION_SPEAK) },
                     onPhoto = { startActivity(CaptureActivity.intent(this, video = false)) },
                     onVideo = { startActivity(CaptureActivity.intent(this, video = true)) },
                     onMusicToggle = { RunService.send(this, RunService.ACTION_MUSIC_TOGGLE) },
@@ -117,6 +118,7 @@ private fun RunScreen(
     onPauseToggle: () -> Unit,
     onFinish: () -> Unit,
     onMemo: () -> Unit,
+    onSpeak: () -> Unit,
     onPhoto: () -> Unit,
     onVideo: () -> Unit,
     onMusicToggle: () -> Unit,
@@ -221,14 +223,15 @@ private fun RunScreen(
                     }
                 }
                 // 走りながら残す：メモ・写真・動画（1回押すだけ。汗や手袋でも押しやすい大きさ）
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TapButton("読上げ", "いまの状況", false, Modifier.weight(1f), onClick = onSpeak)
                     TapButton(
                         label = if (state.recording) "止める" else "メモ",
-                        sub = if (state.recording) "録音中 ${state.recordingSec}秒" else if (state.micReady) "声を録音" else "マイクの許可なし",
+                        sub = if (state.recording) "録音中 ${state.recordingSec}秒" else if (state.micReady) "声を録音" else "許可なし",
                         filled = state.recording, modifier = Modifier.weight(1f), onClick = onMemo,
                     )
-                    TapButton("写真", "3秒後に撮る", false, Modifier.weight(1f), enabled = !state.recording, onClick = onPhoto)
-                    TapButton("動画", "3秒後に撮る", false, Modifier.weight(1f), enabled = !state.recording, onClick = onVideo)
+                    TapButton("写真", "3秒後", false, Modifier.weight(1f), enabled = !state.recording, onClick = onPhoto)
+                    TapButton("動画", "3秒後", false, Modifier.weight(1f), enabled = !state.recording, onClick = onVideo)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HoldButton(
@@ -320,7 +323,7 @@ private fun TapButton(label: String, sub: String, filled: Boolean, modifier: Mod
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, color = fg, fontSize = 23.sp, fontWeight = FontWeight.Black)
+            Text(label, color = fg, fontSize = 21.sp, fontWeight = FontWeight.Black, maxLines = 1)
             Text(sub, color = fg, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
     }

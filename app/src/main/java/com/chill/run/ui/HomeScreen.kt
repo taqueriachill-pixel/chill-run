@@ -227,6 +227,26 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 }
             }
 
+            // シューズ（登録してあれば選ぶ。ロード・トレイルそれぞれ前回のものを覚えておく）
+            val shoes by remember { AppDb.get(context).runDao().observeShoes() }.collectAsState(initial = emptyList())
+            val shoeKms by remember { AppDb.get(context).runDao().observeShoeKm() }.collectAsState(initial = emptyList())
+            var shoeTick by remember { mutableStateOf(0) }
+            Card {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("シューズ")
+                    Text("登録・距離 →", color = Palette.earth, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onNavigate("shoes") })
+                }
+                if (shoes.none { !it.retired }) {
+                    Text("シューズを登録すると、ここで選べます。シューズごとの距離がたまります。", color = Palette.dim, fontSize = 13.sp)
+                } else {
+                    val sel = remember(type, shoeTick) { settings.shoeFor(type.name) }
+                    ShoePicker(shoes, shoeKms, sel, type.name) { settings.setShoeFor(type.name, it); shoeTick++ }
+                    shoes.firstOrNull { it.id == sel }?.let { s ->
+                        if (shoeKm(s, shoeKms) >= s.limitKm) Text("このシューズは買い替えの目安（${"%.0f".format(s.limitKm)}km）を過ぎています。", color = Palette.warn, fontSize = 13.sp)
+                    }
+                }
+            }
+
             // 心拍数の機器を選んであるときだけ：今日のねらい（心拍ゾーンで、ペースが合っているかを声で知らせる）
             if (hasHrDevice && goalKind != GoalKind.INTERVAL) {
                 Card {

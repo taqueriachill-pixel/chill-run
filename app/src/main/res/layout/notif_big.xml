@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 記録中の通知（ひろげたとき）：いまの数字と、4つのボタン -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/n_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification.Title"
+        android:textSize="18sp" />
+
+    <TextView
+        android:id="@+id/n_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:textAppearance="@android:style/TextAppearance.Material.Notification" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <TextView android:id="@+id/n_speak" style="@style/NotifButton" android:text="読み上げ" />
+        <TextView android:id="@+id/n_memo" style="@style/NotifButton" android:text="メモ" />
+        <TextView android:id="@+id/n_photo" style="@style/NotifButton" android:text="写真" />
+        <TextView android:id="@+id/n_video" style="@style/NotifButton" android:text="動画" />
+
+    </LinearLayout>
+</LinearLayout>
