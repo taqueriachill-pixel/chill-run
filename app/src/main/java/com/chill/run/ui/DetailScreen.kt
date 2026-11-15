@@ -747,7 +747,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
             title = { Text("この2つの記録をつなげますか？") },
             text = {
                 Text(
-                    "${formatDate(minOf(r.startTime, other.startTime))} からの1本の記録になります。" +
+                    "この記録と、${formatDate(other.startTime)} からの記録が、1本の記録になります。" +
                         "距離・時間・登りは足し合わせ、1km ごとの区切りは作り直します。メモ・写真・動画も1つにまとまります。\n\n" +
                         "あとの記録は消えて、元に戻せません。ランムービーは作り直しになります。" +
                         "（ヘルスコネクトに書き込んだ分は、2つのまま残ります）",
