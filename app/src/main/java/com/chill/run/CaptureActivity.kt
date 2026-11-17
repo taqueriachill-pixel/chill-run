@@ -16,6 +16,11 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import android.util.Size
+import com.chill.run.data.Storage
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -225,7 +230,17 @@ class CaptureActivity : ComponentActivity() {
                     }
                 } else {
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-                    val ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+                    val ic = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        // 1200万画素くらい（4000×3000）に抑える。スマホや SNS で見るには十分で、大きさは半分以下になる
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                                .setResolutionStrategy(ResolutionStrategy(Size(4000, 3000), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                                .build()
+                        )
+                        .setJpegQuality(90)
+                        .build()
                     provider.bindToLifecycle(this, selector(), preview, ic)
                     imageCapture = ic
                 }
@@ -292,6 +307,12 @@ class CaptureActivity : ComponentActivity() {
         lifecycleScope.launch {
             val ok = withContext(Dispatchers.IO) { MediaFiles.addToCurrentRun(applicationContext, kind, relative, durationMs) }
             if (ok) phase = "saved" else fail("ランの記録が終わっていたので、保存できませんでした。")
+            // スマホの写真フォルダにもコピー（Google フォトのバックアップに入り、アプリを消しても残る）
+            if (ok && Settings(applicationContext).galleryCopy) {
+                (application as com.chill.run.App).scope.launch {
+                    runCatching { Storage.copyToGallery(applicationContext, relative, kind, System.currentTimeMillis()) }
+                }
+            }
         }
     }
 

@@ -58,6 +58,7 @@ import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
+import com.chill.run.data.Storage
 import com.chill.run.data.MergeRuns
 import com.chill.run.data.PointEntity
 import com.chill.run.data.RunEntity
@@ -173,7 +174,10 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
             busyMemo = m.id
             val result = Transcriber.transcribe(context, MediaFiles.file(context, m.file))
             withContext(Dispatchers.IO) {
-                dao.updateMedia(m.copy(text = result.getOrDefault(""), textState = if (result.isSuccess) 1 else 2))
+                val done = m.copy(text = result.getOrDefault(""), textState = if (result.isSuccess) 1 else 2)
+                dao.updateMedia(done)
+                // 文字にできたら、録音を圧縮して小さくする（約10分の1。再生はそのままできる）
+                if (result.isSuccess) runCatching { Storage.compressMemo(context, done) }
             }
             if (result.isFailure) memoMessage = "文字にできなかったメモがあります：${result.exceptionOrNull()?.message}"
         }

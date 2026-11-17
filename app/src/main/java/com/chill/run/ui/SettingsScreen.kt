@@ -22,6 +22,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
+import com.chill.run.data.Storage
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +50,11 @@ import kotlinx.coroutines.withContext
 fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
+    var galleryCopy by remember { mutableStateOf(settings.galleryCopy) }
+    var galleryBusy by remember { mutableStateOf<String?>(null) }
+    var storageNote by remember { mutableStateOf<String?>(null) }
+    var usage by remember { mutableStateOf<Storage.Usage?>(null) }
+    LaunchedEffect(Unit) { usage = withContext(Dispatchers.IO) { Storage.usage(context) } }
     val scope = rememberCoroutineScope()
 
     var autoPause by remember { mutableStateOf(settings.autoPause) }
@@ -300,7 +307,45 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
                 onPlus = { videoSeconds = (videoSeconds + 1).coerceAtMost(5); settings.videoSeconds = videoSeconds },
             )
             SwitchRow("動画の手ブレ補正（映る範囲が少しせまくなります）", videoStabilize) { videoStabilize = it; settings.videoStabilize = it }
-            Text("声のメモは最長60秒。写真・動画・録音は、このアプリの中だけに保存します。", color = Palette.dim, fontSize = 13.sp)
+            Text("声のメモは最長60秒。写真は 1200万画素くらいで保存します。", color = Palette.dim, fontSize = 13.sp)
+        }
+
+        Card {
+            SectionTitle("写真・動画の保存と、使っている量")
+            SwitchRow("写真・動画をスマホの写真フォルダ（ギャラリー）にも保存", galleryCopy) { galleryCopy = it; settings.galleryCopy = it }
+            Text(
+                "写真は「Pictures/ChillRun」、動画は「Movies/ChillRun」に入ります。Google フォトなどのバックアップに入り、アプリを消しても残ります。",
+                color = Palette.dim, fontSize = 13.sp,
+            )
+            SmallButton(if (galleryBusy != null) "保存しています… $galleryBusy" else "これまでの写真・動画もギャラリーに保存", Modifier.fillMaxWidth(), enabled = galleryBusy == null) {
+                galleryBusy = ""
+                scope.launch {
+                    val n = withContext(Dispatchers.IO) { Storage.copyAllToGallery(context) { i, all -> galleryBusy = "$i / $all" } }
+                    galleryBusy = null
+                    storageNote = if (n == 0) "新しく保存するものはありませんでした。" else "$n 件をギャラリーに保存しました。"
+                    usage = withContext(Dispatchers.IO) { Storage.usage(context) }
+                }
+            }
+            usage?.let { u ->
+                Text("このアプリの中で使っている量：${Storage.human(u.total)}", color = Palette.text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                listOf(
+                    "写真" to u.photo, "動画" to u.video, "声のメモ" to u.memo, "ランムービー" to u.movie,
+                    "地図の一時保存" to u.tiles, "記録（ルートや数字）" to u.data,
+                ).forEach { (label, b) ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(label, color = Palette.dim, fontSize = 14.sp)
+                        Text(Storage.human(b), color = Palette.text, fontSize = 14.sp, fontFamily = Type.narrow, fontWeight = FontWeight(700))
+                    }
+                }
+            } ?: Text("使っている量を調べています…", color = Palette.dim, fontSize = 13.sp)
+            SmallButton("文字にした声のメモを小さくする（約10分の1）", Modifier.fillMaxWidth()) {
+                scope.launch {
+                    val n = withContext(Dispatchers.IO) { Storage.compressAllMemos(context) }
+                    storageNote = if (n == 0) "小さくできる声のメモはありませんでした（文字にしたものだけ小さくできます）。" else "$n 件の声のメモを小さくしました。"
+                    usage = withContext(Dispatchers.IO) { Storage.usage(context) }
+                }
+            }
+            storageNote?.let { Text(it, color = Palette.warn, fontSize = 13.sp) }
         }
 
         Card {

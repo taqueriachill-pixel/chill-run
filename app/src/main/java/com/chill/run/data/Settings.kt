@@ -122,6 +122,11 @@ class Settings(context: Context) {
     fun shoeFor(type: String): Long = p.getLong("shoe_$type", 0L)
     fun setShoeFor(type: String, id: Long) = p.edit().putLong("shoe_$type", id).apply()
 
+    /** 写真・動画を、スマホの写真フォルダ（ギャラリー）にも保存するか */
+    var galleryCopy: Boolean
+        get() = p.getBoolean("galleryCopy", true)
+        set(v) = p.edit().putBoolean("galleryCopy", v).apply()
+
     /** 撮影でインカメラを使うか（撮影画面で切り替えると、次もその向きで開く） */
     var frontCamera: Boolean
         get() = p.getBoolean("frontCamera", false)

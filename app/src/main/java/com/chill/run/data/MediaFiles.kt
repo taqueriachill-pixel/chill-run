@@ -49,7 +49,7 @@ object MediaFiles {
     /** 共有メニューを開く（写真フォルダや SNS に書き出したいとき） */
     fun share(context: Context, media: MediaEntity) {
         val uri = FileProvider.getUriForFile(context, "com.chill.run.files", file(context, media.file))
-        val type = when (media.kind) { MEMO -> "audio/wav"; PHOTO -> "image/jpeg"; else -> "video/mp4" }
+        val type = when (media.kind) { MEMO -> if (media.file.endsWith(".m4a")) "audio/mp4" else "audio/wav"; PHOTO -> "image/jpeg"; else -> "video/mp4" }
         val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         context.startActivity(Intent.createChooser(send, "共有").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

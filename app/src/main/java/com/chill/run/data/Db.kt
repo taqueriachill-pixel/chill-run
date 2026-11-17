@@ -370,6 +370,9 @@ interface RunDao {
     @Query("SELECT * FROM media WHERE runId = :runId ORDER BY time")
     suspend fun media(runId: Long): List<MediaEntity>
 
+    @Query("SELECT * FROM media ORDER BY time")
+    suspend fun allMedia(): List<MediaEntity>
+
     @Query("SELECT COUNT(*) FROM media WHERE runId = :runId")
     suspend fun mediaCount(runId: Long): Int
 
