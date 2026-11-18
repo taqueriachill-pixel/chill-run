@@ -126,6 +126,9 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     // 音楽
     private var music: MusicEngine? = null
+    private var remote: RemoteButtons? = null
+    private var camReady = false
+    private var shooting = false
     private var cadenceModel = CadenceModel()
     private var lastPhaseKind: PhaseKind? = null
     private var lastRunTempo = 0.0
@@ -204,10 +207,13 @@ class RunService : Service(), SensorEventListener, LocationListener {
         // まず常駐の通知を出す（画面が開いている間に始めるので「使用中のみ」の位置情報で動く）
         // マイクの許可があれば、ロックしたままでも声のメモを録音できるように microphone も付ける
         micReady = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        // イヤホンのボタンで「ノールック写真」を撮れるよう、カメラの許可があれば camera も付ける（画面を消していても撮れる）
+        camReady = settings.earButtons && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         try {
             val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
                 (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
-                (if (settings.musicOn) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
+                (if (camReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0) or
+                (if (settings.musicOn || settings.earButtons) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
             startForeground(NOTIFICATION_ID, buildNotification(), types)
         } catch (e: Exception) {
             tracker = null
@@ -251,6 +257,11 @@ class RunService : Service(), SensorEventListener, LocationListener {
             sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_FASTEST)
         }
 
+        // イヤホンのボタン：再生／一時停止・次・前の合図を、ランの操作として受け取る
+        if (settings.earButtons) {
+            remote = RemoteButtons(this) { onRemoteButton(it) }.also { it.start(withSilence = !settings.musicOn) }
+        }
+
         // 音楽：曲の一覧と、これまでの記録（ペースとケイデンスの関係）を読んでから、かけ始める
         if (settings.musicOn) {
             scope.launch {
@@ -259,6 +270,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 cadenceModel = CadenceModel(splits.map { (it.movingMs / 1000.0) to Math.round(it.steps / (it.movingMs / 60000.0)).toInt() })
                 val engine = MusicEngine(this@RunService, tracks, settings.tempoRangePercent / 100.0, settings.musicVolumePercent / 100f)
                 music = engine
+                if (remote != null) engine.onButton = { onRemoteButton(it) }
                 speaker?.onSpeakingChanged = { speaking -> music?.setDucked(speaking) }
                 // インターバルの最初の区間で、かけたばかりの曲をすぐ切り替えてしまわないようにする
                 lastPhaseKind = tracker?.currentPhase?.kind
@@ -548,6 +560,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         ticker?.cancel()
         music?.release()
         music = null
+        remote?.stop()
+        remote = null
         hrClient?.close()
         hrClient = null
         runCatching { locationManager.removeUpdates(this) }
@@ -742,6 +756,46 @@ class RunService : Service(), SensorEventListener, LocationListener {
             .build()
     }
 
+    /** イヤホンの合図を、設定で決めたランの操作に置きかえる */
+    private fun onRemoteButton(signal: RemoteButtons.Signal) {
+        if (tracker == null) return
+        when (settings.buttonAction(signal.name)) {
+            "SPEAK" -> speakStatus()
+            "MEMO" -> toggleMemo()
+            "PHOTO" -> pocketPhoto()
+            "MUSIC_TOGGLE" -> { music?.togglePause("イヤホンのボタン"); publish() }
+            "MUSIC_NEXT" -> { music?.next("イヤホンのボタン"); publish() }
+            else -> {}
+        }
+    }
+
+    /** 画面を出さずに写真を1枚撮る（ノールック写真）。撮れたら音と声で知らせる */
+    private fun pocketPhoto() {
+        val sp = speaker ?: Speaker(this, settings.ttsRate, settings.ttsVolume).also { speaker = it }
+        if (!camReady) { sp.say("カメラの許可がないので、写真を撮れません", flush = true); vibrate(600); return }
+        if (shooting || recorder.recording || !runId.isCompleted) return
+        shooting = true
+        val id = runId.getCompleted()
+        val relative = MediaFiles.newRelativePath(id, MediaFiles.PHOTO)
+        val context = applicationContext
+        vibrate(80)
+        scope.launch {
+            val ok = runCatching { PocketCamera(context).shoot(MediaFiles.file(context, relative)) }.getOrDefault(false)
+            shooting = false
+            if (ok && withContext(Dispatchers.IO) { MediaFiles.addToCurrentRun(context, MediaFiles.PHOTO, relative) }) {
+                sp.chime()
+                sp.say("写真を撮りました")
+                vibrate(160)
+                if (settings.galleryCopy) (application as App).scope.launch {
+                    runCatching { com.chill.run.data.Storage.copyToGallery(context, relative, MediaFiles.PHOTO, System.currentTimeMillis()) }
+                }
+            } else {
+                sp.say("写真を撮れませんでした", flush = true)
+                vibrate(600)
+            }
+        }
+    }
+
     /** いまの状況を声で伝える（ロック画面の「読み上げ」や、走っている画面のボタンから） */
     private fun speakStatus() {
         val t = tracker ?: return
@@ -772,6 +826,8 @@ class RunService : Service(), SensorEventListener, LocationListener {
         // 終了の操作なしに止められた場合は、次にアプリを開いたときに App が記録を仕上げる
         music?.release()
         music = null
+        remote?.stop()
+        remote = null
         hrClient?.close()
         hrClient = null
         if (recorder.recording) recorder.stop()

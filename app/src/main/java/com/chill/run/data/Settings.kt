@@ -127,6 +127,19 @@ class Settings(context: Context) {
         get() = p.getBoolean("galleryCopy", true)
         set(v) = p.edit().putBoolean("galleryCopy", v).apply()
 
+    /** イヤホン（や時計）のボタンで、ランを操作するか */
+    var earButtons: Boolean
+        get() = p.getBoolean("earButtons", true)
+        set(v) = p.edit().putBoolean("earButtons", v).apply()
+
+    /** イヤホンの合図ごとの操作（SPEAK・MEMO・PHOTO・MUSIC_TOGGLE・MUSIC_NEXT・NONE） */
+    fun buttonAction(signal: String): String = p.getString("btn_$signal", null) ?: when (signal) {
+        "PLAY_PAUSE" -> "SPEAK"
+        "NEXT" -> "MEMO"
+        else -> "PHOTO"
+    }
+    fun setButtonAction(signal: String, action: String) = p.edit().putString("btn_$signal", action).apply()
+
     /** 撮影でインカメラを使うか（撮影画面で切り替えると、次もその向きで開く） */
     var frontCamera: Boolean
         get() = p.getBoolean("frontCamera", false)

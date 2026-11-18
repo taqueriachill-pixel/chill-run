@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import com.chill.run.run.RemoteButtons
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.LaunchedEffect
 import com.chill.run.data.Storage
@@ -311,6 +312,8 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
             Text("声のメモは最長60秒。写真は 1200万画素くらいで保存します。", color = Palette.dim, fontSize = 13.sp)
         }
 
+        EarButtonsCard(settings)
+
         Card {
             SectionTitle("写真・動画の保存と、使っている量")
             SwitchRow("写真・動画をスマホの写真フォルダ（ギャラリー）にも保存", galleryCopy) { galleryCopy = it; settings.galleryCopy = it }
@@ -492,5 +495,55 @@ fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = Palette.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+private val BUTTON_ACTIONS = listOf(
+    "SPEAK" to "読み上げ", "MEMO" to "声のメモ", "PHOTO" to "ノールック写真",
+    "MUSIC_TOGGLE" to "音楽の停止／再開", "MUSIC_NEXT" to "次の曲", "NONE" to "何もしない",
+)
+
+/** イヤホンのボタンの割り当てと、どの合図が届くかのテスト */
+@Composable
+private fun EarButtonsCard(settings: Settings) {
+    val context = LocalContext.current
+    var on by remember { mutableStateOf(settings.earButtons) }
+    var tick by remember { mutableIntStateOf(0) }
+    var testing by remember { mutableStateOf(false) }
+    var heard by remember { mutableStateOf<String?>(null) }
+    Card {
+        SectionTitle("イヤホンのボタン")
+        SwitchRow("走っている間、イヤホンのボタンでランを操作する", on) { on = it; settings.earButtons = it }
+        Text(
+            "どのイヤホンでも、タップは「再生／一時停止」「次の曲」「前の曲」の合図になって届きます。合図ごとに、操作を選んでください。" +
+                "どのタップでどの合図になるかは、イヤホンのアプリで変えられることがあります。",
+            color = Palette.dim, fontSize = 13.sp,
+        )
+        if (on) {
+            RemoteButtons.Signal.values().forEach { sig ->
+                val current = remember(tick) { settings.buttonAction(sig.name) }
+                Text(sig.label, color = Palette.text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                BUTTON_ACTIONS.chunked(3).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { (key, label) ->
+                            Chip(label, current == key, Modifier.weight(1f), color = Palette.earth) { settings.setButtonAction(sig.name, key); tick++ }
+                        }
+                    }
+                }
+            }
+            Text("ノールック写真：画面を出さずに、後ろのカメラで1枚撮ります（撮れたら「写真を撮りました」と声で知らせます）。ポケットの中では暗くなるので、手に持って前に向けてください。", color = Palette.dim, fontSize = 12.sp)
+            SmallButton(if (testing) "テストをやめる" else "ボタンテスト（どの合図が届くか見る）", Modifier.fillMaxWidth()) { testing = !testing; heard = null }
+            if (testing) {
+                DisposableEffect(Unit) {
+                    val r = RemoteButtons(context) { sig ->
+                        val act = BUTTON_ACTIONS.firstOrNull { it.first == settings.buttonAction(sig.name) }?.second ?: "何もしない"
+                        heard = "「${sig.label}」が届きました → 走っている間は「$act」"
+                    }
+                    r.start(withSilence = true)
+                    onDispose { r.stop() }
+                }
+                Text(heard ?: "イヤホンを1回・2回・3回タップしたり、長押ししたりしてみてください。", color = if (heard != null) Palette.ok else Palette.dim, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }

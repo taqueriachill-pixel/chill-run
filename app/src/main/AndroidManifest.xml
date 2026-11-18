@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- イヤホンのボタンから、画面を出さずに写真を撮る（ノールック写真） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 16 の「ライブ アップデート」（記録中の通知を、ロック画面などで優先して出す） -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
@@ -124,6 +126,6 @@
         <service
             android:name=".run.RunService"
             android:exported="false"
-            android:foregroundServiceType="location|microphone|mediaPlayback" />
+            android:foregroundServiceType="location|microphone|mediaPlayback|camera" />
     </application>
 </manifest>

@@ -120,11 +120,20 @@ class MusicEngine(
         .build()
 
     // ---- イヤホンのボタン ----
+    /** イヤホンの合図を、ランの操作として受け取る先（決めてあれば、音楽の操作より先にこちらへ回す） */
+    var onButton: ((com.chill.run.run.RemoteButtons.Signal) -> Unit)? = null
+
     private val session = MediaSession(appContext, "ChillRunMusic").apply {
         setCallback(object : MediaSession.Callback() {
-            override fun onPlay() = setUserPaused(false, "イヤホンや時計のボタン")
-            override fun onPause() = setUserPaused(true, "イヤホンや時計のボタン")
-            override fun onSkipToNext() = next("イヤホンや時計のボタン")
+            override fun onMediaButtonEvent(mediaButtonIntent: android.content.Intent): Boolean {
+                val to = onButton ?: return super.onMediaButtonEvent(mediaButtonIntent)
+                com.chill.run.run.RemoteButtons.signalOf(mediaButtonIntent)?.let(to)
+                return true
+            }
+            override fun onPlay() { onButton?.invoke(com.chill.run.run.RemoteButtons.Signal.PLAY_PAUSE) ?: setUserPaused(false, "イヤホンや時計のボタン") }
+            override fun onPause() { onButton?.invoke(com.chill.run.run.RemoteButtons.Signal.PLAY_PAUSE) ?: setUserPaused(true, "イヤホンや時計のボタン") }
+            override fun onSkipToNext() { onButton?.invoke(com.chill.run.run.RemoteButtons.Signal.NEXT) ?: next("イヤホンや時計のボタン") }
+            override fun onSkipToPrevious() { onButton?.invoke(com.chill.run.run.RemoteButtons.Signal.PREV) }
         }, handler)
     }
 
