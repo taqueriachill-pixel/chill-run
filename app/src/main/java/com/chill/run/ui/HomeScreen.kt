@@ -1,0 +1,361 @@
+package com.chill.run.ui
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Looper
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import com.chill.run.core.Fmt
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.chill.run.RunActivity
+import com.chill.run.core.GoalKind
+import com.chill.run.core.RunType
+import com.chill.run.data.AppDb
+import com.chill.run.data.Settings
+import com.chill.run.run.RunHub
+import com.chill.run.run.RunService
+
+@SuppressLint("MissingPermission")
+@Composable
+fun HomeScreen(onNavigate: (String) -> Unit) {
+    val context = LocalContext.current
+    val settings = remember { Settings(context) }
+    val live by RunHub.state.collectAsState()
+
+    var type by remember { mutableStateOf(runCatching { RunType.valueOf(settings.lastType) }.getOrDefault(RunType.ROAD)) }
+    var goalKind by remember { mutableStateOf(runCatching { GoalKind.valueOf(settings.lastGoalKind) }.getOrDefault(GoalKind.FREE)) }
+    var goalKm by remember { mutableFloatStateOf(settings.lastGoalKm) }
+    var goalMin by remember { mutableIntStateOf(settings.lastGoalMinutes) }
+    var hasLocation by remember { mutableStateOf(Perms.location(context)) }
+    var gpsAccuracy by remember { mutableStateOf<Float?>(null) }
+    var aim by remember { mutableStateOf(settings.lastAim) }
+    val hasHrDevice = settings.hrDeviceAddress.isNotEmpty()
+    val dao = remember { AppDb.get(context).runDao() }
+    val allTracks by remember { dao.observeTracks() }.collectAsState(initial = emptyList())
+    val trackCount = allTracks.count { it.enabled && it.bpm > 0 }
+    var musicOn by remember { mutableStateOf(settings.musicOn) }
+    val menus by remember { dao.observeMenus() }.collectAsState(initial = emptyList())
+    var menuId by remember { mutableLongStateOf(settings.lastMenuId) }
+    val menu = menus.firstOrNull { it.id == menuId } ?: menus.firstOrNull()
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { hasLocation = Perms.location(context) }
+
+    fun startRun() {
+        settings.lastType = type.name
+        settings.lastGoalKind = goalKind.name
+        settings.lastGoalKm = goalKm
+        settings.lastGoalMinutes = goalMin
+        val goalValue = when (goalKind) {
+            GoalKind.FREE, GoalKind.INTERVAL -> 0.0
+            GoalKind.DISTANCE -> goalKm * 1000.0
+            GoalKind.TIME -> goalMin * 60.0
+        }
+        val plan = if (goalKind == GoalKind.INTERVAL) menu?.toPlan() ?: return else null
+        if (menu != null) settings.lastMenuId = menu.id
+        settings.lastAim = aim
+        RunService.start(context, type, goalKind, goalValue, plan, if (hasHrDevice) aim else "")
+        context.startActivity(Intent(context, RunActivity::class.java))
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        hasLocation = Perms.location(context)
+    }
+
+    // スタート前に GPS を温めておく（走り出しの位置がずれにくくなる）
+    if (hasLocation && !live.active) {
+        DisposableEffect(Unit) {
+            val lm = context.getSystemService(LocationManager::class.java)
+            val listener = LocationListener { loc -> gpsAccuracy = if (loc.hasAccuracy()) loc.accuracy else null }
+            runCatching { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, listener, Looper.getMainLooper()) }
+            onDispose { runCatching { lm.removeUpdates(listener) } }
+        }
+    }
+
+    val accent = Palette.of(type)
+    val progress = rememberProgress()
+    val today = remember { java.time.LocalDate.now() }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        // 見出し：等高線の上に、大きな言葉（枠の高さは文字に合わせて伸びる）
+        Box(Modifier.fillMaxWidth()) {
+            Topo(Modifier.matchParentSize(), Color(0xFFB9AE97))
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("CHILL RUN", color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp)
+                    Text(
+                        today.format(java.time.format.DateTimeFormatter.ofPattern("MMM d · EEE", java.util.Locale.ENGLISH)).uppercase(),
+                        color = Palette.earth, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 15.sp, letterSpacing = 2.sp,
+                    )
+                }
+                if (!live.active) Display("GO\nOUT\nSIDE.", 104, Modifier.padding(top = 28.dp, bottom = 16.dp), color = Palette.earth)
+                else Display("ON THE\nRUN.", 64, Modifier.padding(top = 24.dp, bottom = 12.dp), color = Palette.earth)
+            }
+        }
+
+        // 今週・続いた週・レベル
+        progress?.let { p ->
+            FigureRow(
+                listOf(
+                    Triple("今週", "${p.weekDays}/${p.weekGoal} 日", if (p.weekDays >= p.weekGoal) Palette.ok else Palette.earth),
+                    Triple("れんぞく", "${p.streakWeeks} 週", Palette.signal),
+                    Triple("レベル", "${p.level}", Palette.earth),
+                ),
+            )
+            LevelBar(p)
+            if (p.weekDays < p.weekGoal) {
+                Text(
+                    "あと ${p.weekGoal - p.weekDays} 日走ると、今週のもくひょう達成（＋${com.chill.run.core.Progress.WEEK_GOAL_BONUS}）",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+            }
+        }
+
+        if (live.active) {
+            Card {
+                Text("いま記録中です", color = Palette.warn, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                BigButton("走っている画面に戻る", Modifier.fillMaxWidth(), color = Palette.of(live.type)) {
+                    context.startActivity(Intent(context, RunActivity::class.java))
+                }
+            }
+        } else {
+            // 1時間以内に終えたランがあれば、その続きとして走れる（終わったら1本につながる）
+            val recent by remember { AppDb.get(context).runDao().observeRuns() }.collectAsState(initial = emptyList())
+            val last = recent.filter { it.endTime > 0 }.maxByOrNull { it.endTime }
+            if (last != null && System.currentTimeMillis() - last.endTime < 60 * 60_000L) {
+                Row(
+                    Modifier.fillMaxWidth().border(2.dp, Palette.earth).clickable {
+                        settings.continueOfRunId = last.id
+                        type = runCatching { RunType.valueOf(last.type) }.getOrDefault(RunType.ROAD)
+                        startRun()
+                    }.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("さっきのランの続きを走る", color = Palette.earth, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                        Text(
+                            "${formatDate(last.startTime)} から ${Fmt.km(last.distanceM)}km。終わると1本の記録につながります",
+                            color = Palette.dim, fontSize = 12.sp,
+                        )
+                    }
+                    Display("→", 34, color = Palette.earth)
+                }
+            }
+
+            // ロードかトレイルか（大きな2つの札。選んだほうが塗られる）
+            TypeTile("ROAD", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
+            TypeTile("TRAIL", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }
+            TypeTile("TREADMILL", Palette.machine, type == RunType.TREADMILL) { type = RunType.TREADMILL }
+
+            Card {
+                SectionTitle("メニュー")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("自由に走る", goalKind == GoalKind.FREE, Modifier.weight(1f), color = accent) { goalKind = GoalKind.FREE }
+                    Chip("目標の距離", goalKind == GoalKind.DISTANCE, Modifier.weight(1f), color = accent) { goalKind = GoalKind.DISTANCE }
+                    Chip("目標の時間", goalKind == GoalKind.TIME, Modifier.weight(1f), color = accent) { goalKind = GoalKind.TIME }
+                }
+                Chip("インターバル", goalKind == GoalKind.INTERVAL, Modifier.fillMaxWidth(), color = accent) { goalKind = GoalKind.INTERVAL }
+                when (goalKind) {
+                    GoalKind.DISTANCE -> Stepper(
+                        "%.1f km".format(goalKm),
+                        onMinus = { goalKm = (goalKm - 0.5f).coerceAtLeast(0.5f) },
+                        onPlus = { goalKm = (goalKm + 0.5f).coerceAtMost(100f) },
+                    )
+                    GoalKind.TIME -> Stepper(
+                        "$goalMin 分",
+                        onMinus = { goalMin = (goalMin - 5).coerceAtLeast(5) },
+                        onPlus = { goalMin = (goalMin + 5).coerceAtMost(600) },
+                    )
+                    GoalKind.FREE -> {}
+                    GoalKind.INTERVAL -> {
+                        if (menus.isEmpty()) {
+                            Text("まだメニューがありません。まず1つ作ってください。", color = Palette.dim, fontSize = 14.sp)
+                        } else {
+                            menus.chunked(2).forEach { rowItems ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    rowItems.forEach { m ->
+                                        Chip(m.name, m.id == menu?.id, Modifier.weight(1f), color = accent) { menuId = m.id }
+                                    }
+                                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                            if (menu != null) Text(menu.summary(), color = Palette.text, fontSize = 15.sp)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (menu != null) SmallButton("このメニューを直す", Modifier.weight(1f)) { onNavigate("interval/${menu.id}") }
+                            SmallButton("新しく作る", Modifier.weight(1f)) { onNavigate("interval/0") }
+                        }
+                    }
+                }
+            }
+
+            // シューズ（登録してあれば選ぶ。ロード・トレイルそれぞれ前回のものを覚えておく）
+            val shoes by remember { AppDb.get(context).runDao().observeShoes() }.collectAsState(initial = emptyList())
+            val shoeKms by remember { AppDb.get(context).runDao().observeShoeKm() }.collectAsState(initial = emptyList())
+            var shoeTick by remember { mutableStateOf(0) }
+            Card {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("シューズ")
+                    Text("登録・距離 →", color = Palette.earth, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onNavigate("shoes") })
+                }
+                if (shoes.none { !it.retired }) {
+                    Text("シューズを登録すると、ここで選べます。シューズごとの距離がたまります。", color = Palette.dim, fontSize = 13.sp)
+                } else {
+                    val sel = remember(type, shoeTick) { settings.shoeFor(type.name) }
+                    ShoePicker(shoes, shoeKms, sel, if (type == RunType.TREADMILL) "ROAD" else type.name) { settings.setShoeFor(type.name, it); shoeTick++ }
+                    shoes.firstOrNull { it.id == sel }?.let { s ->
+                        if (shoeKm(s, shoeKms) >= s.limitKm) Text("このシューズは買い替えの目安（${"%.0f".format(s.limitKm)}km）を過ぎています。", color = Palette.warn, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            // 心拍数の機器を選んであるときだけ：今日のねらい（心拍ゾーンで、ペースが合っているかを声で知らせる）
+            if (hasHrDevice && goalKind != GoalKind.INTERVAL) {
+                Card {
+                    SectionTitle("今日のねらい（心拍数でペースを見張る）")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Chip("なし", aim == "", Modifier.weight(1f), color = accent) { aim = "" }
+                        Chip("ゆっくりジョグ", aim == "JOG", Modifier.weight(1f), color = accent) { aim = "JOG" }
+                        Chip("ペース走", aim == "TEMPO", Modifier.weight(1f), color = accent) { aim = "TEMPO" }
+                    }
+                    Text(
+                        when (aim) {
+                            "JOG" -> "目標はゾーン ${zoneText(settings.jogZoneLo, settings.jogZoneHi)}。上がりすぎが1分続くと知らせます。"
+                            "TEMPO" -> "目標はゾーン ${zoneText(settings.tempoZoneLo, settings.tempoZoneHi)}。上がりすぎ・余裕がありすぎを知らせます。"
+                            else -> "心拍数の注意は出しません（1km ごとの心拍数とゾーンは伝えます）。"
+                        } + "　走る前に、時計を「走るモード」にしてください。",
+                        color = Palette.dim, fontSize = 13.sp,
+                    )
+                }
+            } else if (hasHrDevice) {
+                Text(
+                    "インターバルの「走る」は、ゾーン ${zoneText(settings.intervalZoneLo, settings.intervalZoneHi)} が目標です。走る前に、時計を「走るモード」にしてください。",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+            }
+
+            Card {
+                SectionTitle("音楽")
+                if (trackCount == 0) {
+                    Text("曲のフォルダを選ぶと、走るテンポに合わせて音楽を流せます。", color = Palette.dim, fontSize = 13.sp)
+                } else {
+                    SwitchRow("音楽を流す（テンポを足に合わせる）", musicOn) { musicOn = it; settings.musicOn = it }
+                    Text("BPM の分かる曲：$trackCount 曲", color = Palette.dim, fontSize = 13.sp)
+                }
+                SmallButton("曲とテンポの設定", Modifier.fillMaxWidth()) { onNavigate("music") }
+            }
+
+            if (type == RunType.TREADMILL) {
+                Text(
+                    "ランニングマシン：GPS は使わず、歩数から距離を出します。スマホはポケットかアームバンドに入れてください（手に持つ・台に置くと数えられません）。" +
+                        "終わったら、マシンに出た距離を入れると、ぴったりに直せます。",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+                StartButton("TREADMILL", accent, enabled = goalKind != GoalKind.INTERVAL || menu != null) { startRun() }
+            } else if (!hasLocation) {
+                Card {
+                    Text("位置情報の許可が必要です（「正確な位置」「アプリの使用中のみ」）。", color = Palette.warn, fontSize = 15.sp)
+                    BigButton("許可する", Modifier.fillMaxWidth(), color = Palette.warn) { permissionLauncher.launch(Perms.basic) }
+                }
+            } else {
+                Text(
+                    when (val a = gpsAccuracy) {
+                        null -> "GPS をさがしています…（空の見える場所で少し待つと正確になります）"
+                        else -> if (a <= 10f) "GPS 良好（±${Math.round(a)}m）" else "GPS 受信中（±${Math.round(a)}m）もう少し待つと正確になります"
+                    },
+                    color = if ((gpsAccuracy ?: 99f) <= 10f) Palette.ok else Palette.dim, fontSize = 14.sp,
+                )
+                StartButton(if (type == RunType.TRAIL) "TRAIL" else "ROAD", accent, enabled = goalKind != GoalKind.INTERVAL || menu != null) { startRun() }
+            }
+        }
+
+        // いちばん下：ほかの画面へ
+        Rule(thick = false)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SmallButton("きろく", Modifier.weight(1f)) { onNavigate("history") }
+            SmallButton("ふりかえり", Modifier.weight(1f)) { onNavigate("review") }
+            SmallButton("せってい", Modifier.weight(1f)) { onNavigate("settings") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SmallButton("許可の状態", Modifier.weight(1f)) { onNavigate("permissions") }
+            SmallButton("実機チェック", Modifier.weight(1f)) { onNavigate("check") }
+        }
+        Gap(8)
+    }
+}
+
+/** ロード・トレイルの大きな札。選ばれていると塗りつぶし、そうでなければ線だけ */
+@Composable
+private fun TypeTile(word: String, color: Color, selected: Boolean, onClick: () -> Unit) {
+    val fg = if (selected) Palette.on(color) else color
+    Row(
+        Modifier.fillMaxWidth().height(96.dp)
+            .semantics { this.selected = selected }
+            .background(if (selected) color else Color.Transparent)
+            .border(2.dp, color)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Display(word, 54, color = fg)
+        if (selected) Text("✓", color = fg, fontSize = 26.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+/** スタートの大きなボタン */
+@Composable
+private fun StartButton(word: String, color: Color, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(80.dp)
+            .background(if (enabled) color else Palette.line)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text("スタート", color = if (enabled) Palette.on(color) else Palette.dim, fontSize = 22.sp, fontWeight = FontWeight.Black)
+        Display("$word →", 34, color = if (enabled) Palette.on(color) else Palette.dim)
+    }
+}
+
+fun zoneText(lo: Int, hi: Int) = if (lo == hi) "$lo" else "$lo〜$hi"

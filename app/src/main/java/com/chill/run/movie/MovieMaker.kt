@@ -1,0 +1,722 @@
+package com.chill.run.movie
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageDecoder
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import androidx.compose.ui.graphics.asAndroidBitmap
+import com.chill.run.R
+import com.chill.run.core.Fmt
+import com.chill.run.core.HeartZones
+import com.chill.run.core.MapMath
+import com.chill.run.core.MovieScript
+import com.chill.run.core.RunTune
+import com.chill.run.core.Tile
+import com.chill.run.core.TuneMood
+import com.chill.run.core.Yuv
+import com.chill.run.data.AppDb
+import com.chill.run.data.MediaEntity
+import com.chill.run.data.MediaFiles
+import com.chill.run.data.PointEntity
+import com.chill.run.data.RunEntity
+import com.chill.run.data.Settings
+import com.chill.run.data.TileStore
+import com.chill.run.run.Weather
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.math.floor
+import kotlin.math.pow
+
+/**
+ * 10秒の「今日のランムービー」を、スマホの中だけで作る。縦長（9:16、720×1280）。曲も、その場で作って入れる。
+ * 1コマずつ絵を描いて、動画に固めていく。
+ */
+object MovieMaker {
+    private const val W = 720
+    private const val H = 1280
+    private val enDate = DateTimeFormatter.ofPattern("MMM d · EEE", Locale.ENGLISH)
+    private const val TILE_PX = 384.0 // 地図の文字が読めるよう、タイルを 1.5倍で描く
+    private const val AUDIO_RATE = 44100
+    private val lock = Mutex()
+    // 色（アプリと同じ「アウトドア誌」の見た目）
+    private val ROAD = Color.parseColor("#2D3A2E")   // 深い緑
+    private val TRAIL = Color.parseColor("#E8571E")  // 信号のオレンジ
+    private val BG = Color.parseColor("#F3EFE6")     // 生成りの紙
+    private val INK = Color.parseColor("#2D3A2E")
+    private val DIM = Color.parseColor("#6C6556")
+    private val TOPO = Color.parseColor("#C9BFA9")
+    private val SIGNAL = TRAIL
+    private val MACHINE = Color.parseColor("#3E5C76")
+    private val dateFmt = DateTimeFormatter.ofPattern("yyyy年M月d日(E)", Locale.JAPAN)
+
+    private class Scene(
+        val run: RunEntity,
+        val place: String,
+        val accent: Int,
+        val map: Bitmap,
+        /** 隠す場所を除いた、ひと続きの線ごとの点（地図の絵の上の位置）と、その点までの距離の割合 */
+        val segments: List<List<FloatArray>>,
+        val elevation: List<Pair<Float, Float>>, // 距離の割合 と 標高
+        val media: List<List<Bitmap>>,           // 写真は1枚、動画は何コマか
+        val caption: String,
+        val monthKm: Double,
+        /** その場で作った曲（入れないときは null）と、その説明 */
+        val tune: FloatArray?,
+        val tuneNote: String,
+        /** ランニングマシン：地図の代わりに、1km ごとのタイム（秒）を棒で見せる */
+        val indoorSplits: List<Double> = emptyList(),
+    ) {
+        val indoor get() = run.type == "TREADMILL"
+    }
+
+    /** @return できた動画の記録。onProgress には 0〜100 が渡る */
+    suspend fun make(context: Context, runId: Long, onProgress: (Int) -> Unit = {}): Result<MediaEntity> = lock.withLock {
+        // 曲づくりの材料にする天気を、まだなら調べておく（通信できなければ、天気なしで作る。ランニングマシンは調べない）
+        val isIndoor = AppDb.get(context.applicationContext).runDao().getRun(runId)?.type == "TREADMILL"
+        if (!isIndoor) runCatching { Weather.ensureForRun(context.applicationContext, runId) }
+        withContext(Dispatchers.Default) {
+            runCatching {
+                val app = context.applicationContext
+                val dao = AppDb.get(app).runDao()
+                val run = dao.getRun(runId) ?: error("記録が見つかりません")
+                val points = dao.points(runId)
+                if (points.size < 2) error("ルートの記録がありません")
+                onProgress(2)
+                val scene = prepare(app, run, points)
+                onProgress(15)
+
+                val relative = MediaFiles.newRelativePath(runId, MediaFiles.MOVIE)
+                val file = MediaFiles.file(app, relative).also { it.parentFile?.mkdirs() }
+                try {
+                    encode(file, scene) { f -> onProgress(15 + f * 83 / totalFrames()) }
+                } catch (e: Exception) {
+                    file.delete()
+                    throw e
+                } finally {
+                    scene.map.recycle()
+                    scene.media.flatten().forEach { it.recycle() }
+                }
+                // 前に作ったムービーがあれば、置きかえる
+                dao.media(runId).filter { it.kind == MediaFiles.MOVIE }.forEach { MediaFiles.delete(app, it) }
+                val entity = MediaEntity(
+                    runId = runId, kind = MediaFiles.MOVIE, time = System.currentTimeMillis(),
+                    lat = null, lon = null, distM = run.distanceM, file = relative, durationMs = (MovieScript.TOTAL_SEC * 1000).toLong(),
+                    // 曲をどう決めたかを、残しておく（記録の画面に出す）
+                    text = scene.tuneNote,
+                )
+                val id = dao.insertMedia(entity)
+                onProgress(100)
+                entity.copy(id = id)
+            }
+        }
+    }
+
+    private fun totalFrames() = (MovieScript.TOTAL_SEC * MovieScript.FPS).toInt()
+
+    /**
+     * 地図だけを、1枚の画像（PNG・縦長）に書き出す（仕様 2-5 の「地図の書き出し」）。
+     * ランムービーと同じく、隠す場所（自宅など）のまわりのルートは描かない。
+     * @return できた画像のファイル（アプリの中。共有メニューから外に出す）
+     */
+    suspend fun exportMap(context: Context, runId: Long): Result<File> = lock.withLock {
+        withContext(Dispatchers.Default) {
+            runCatching {
+                val app = context.applicationContext
+                val dao = AppDb.get(app).runDao()
+                val run = dao.getRun(runId) ?: error("記録が見つかりません")
+                val points = dao.points(runId)
+                if (points.size < 2) error("ルートの記録がありません")
+                val scene = prepare(app, run, points, mapOnly = true)
+                val bitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+                try {
+                    val c = Canvas(bitmap)
+                    drawMap(c, scene, 1f)
+                    // 上の帯の下に、日付・場所と、数字
+                    fill.color = BG; fill.alpha = 240
+                    c.drawRect(0f, 150f, W.toFloat(), 262f, fill)
+                    val date = dateFmt.format(Instant.ofEpochMilli(run.startTime).atZone(ZoneId.systemDefault()))
+                    drawText(c, date + if (scene.place.isNotEmpty()) "　${scene.place}" else "", 36f, 198f, 30f, INK, Paint.Align.LEFT)
+                    val pace = if (run.distanceM > 10) run.movingMs / 1000.0 / (run.distanceM / 1000.0) else null
+                    drawText(
+                        c, "タイム ${Fmt.clock(run.movingMs)}　平均 ${Fmt.pace(pace)}/km　登り +${Math.round(run.gainM)}m",
+                        36f, 244f, 30f, DIM, Paint.Align.LEFT,
+                    )
+                    drawLatin(c, "CHILL RUN", W - 20f, H - 14f, 24f, INK, Paint.Align.RIGHT, heavy = false, spacing = 0.12f)
+                    // 共有するまでの一時置き場（アプリの「キャッシュ」。バックアップには入らない）
+                    val file = File(app.cacheDir, "exports/run_${runId}_map.png").also { it.parentFile?.mkdirs() }
+                    file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    file
+                } finally {
+                    bitmap.recycle()
+                    scene.map.recycle()
+                }
+            }
+        }
+    }
+
+    // ---------- 下ごしらえ ----------
+
+    /** ランニングマシン：地図・経路・標高なし。1km ごとのタイムを読んでおき、あとは屋外と同じ */
+    private suspend fun prepareIndoor(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean): Scene {
+        val blank = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888).also { Canvas(it).drawColor(BG) }
+        val splits = AppDb.get(context).runDao().splits(run.id).filter { it.distanceM >= 990 }.map { it.movingMs / 1000.0 }
+        return prepareRest(context, run, points, blank, emptyList(), emptyList(), mapOnly, splits)
+    }
+
+    private suspend fun prepare(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean = false): Scene {
+        loadFonts(context)
+        val dao = AppDb.get(context).runDao()
+        val hide = Settings(context).hideZone
+        val total = points.last().distM.coerceAtLeast(1.0)
+        if (run.type == "TREADMILL") return prepareIndoor(context, run, points, mapOnly)
+        // 隠す場所（自宅など）の近くは描かない
+        val shown = points.map { p -> hide?.hides(p.lat, p.lon) != true }
+        val visible = points.filterIndexed { i, _ -> shown[i] }.ifEmpty { points }
+
+        // 地図：見えるルートが画面に収まる大きさで、1枚の絵にしておく
+        val minLat = visible.minOf { it.lat }; val maxLat = visible.maxOf { it.lat }
+        val minLon = visible.minOf { it.lon }; val maxLon = visible.maxOf { it.lon }
+        val zoom = MapMath.fitZoom(minLat, maxLat, minLon, maxLon, W * 0.78, H * 0.55, TILE_PX).coerceAtMost(17.0)
+        val tz = floor(zoom + 0.5).toInt().coerceIn(MapMath.MIN_ZOOM, MapMath.MAX_ZOOM)
+        val tileDisp = TILE_PX * 2.0.pow(zoom - tz)
+        val world = tileDisp * 2.0.pow(tz)
+        val cx = (MapMath.lonToX(minLon) + MapMath.lonToX(maxLon)) / 2
+        val cy = (MapMath.latToY(minLat) + MapMath.latToY(maxLat)) / 2
+        val left = cx * world - W / 2.0
+        val top = cy * world - H * 0.52 // ルートを、画面の少し上寄りに置く（下に標高のグラフが来るため）
+        val map = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(map)
+        canvas.drawColor(Color.parseColor("#DAD7CF"))
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        val n = 1 shl tz
+        for (x in floor(left / tileDisp).toInt()..floor((left + W) / tileDisp).toInt()) {
+            for (y in floor(top / tileDisp).toInt()..floor((top + H) / tileDisp).toInt()) {
+                if (x !in 0 until n || y !in 0 until n) continue
+                val tile = TileStore.load(context, Tile(tz, x, y)) ?: continue
+                val dx = (x * tileDisp - left).toFloat()
+                val dy = (y * tileDisp - top).toFloat()
+                canvas.drawBitmap(tile.asAndroidBitmap(), null, RectF(dx, dy, dx + tileDisp.toFloat() + 1, dy + tileDisp.toFloat() + 1), paint)
+            }
+        }
+        // ルートが目立つよう、地図を少し暗くする
+        canvas.drawColor(Color.argb(70, 0, 0, 0))
+
+        fun project(p: PointEntity) = floatArrayOf(
+            (MapMath.lonToX(p.lon) * world - left).toFloat(),
+            (MapMath.latToY(p.lat) * world - top).toFloat(),
+            (p.distM / total).toFloat(),
+        )
+        val segments = ArrayList<List<FloatArray>>()
+        var current = ArrayList<FloatArray>()
+        val stride = points.size / 1200 + 1
+        for (i in points.indices) {
+            if (!shown[i]) {
+                if (current.size >= 2) segments += current
+                current = ArrayList()
+            } else if (i % stride == 0 || i == points.lastIndex) current += project(points[i])
+        }
+        if (current.size >= 2) segments += current
+
+        val elevation = points.filter { it.alt != null }.let { list ->
+            val s = list.size / 300 + 1
+            list.filterIndexed { i, _ -> i % s == 0 }.map { (it.distM / total).toFloat() to (it.alt!! + run.altOffset).toFloat() }
+        }
+
+        return prepareRest(context, run, points, map, segments, elevation, mapOnly)
+    }
+
+    /** 写真・動画・字幕・今月の距離・曲を用意して、場面の材料をまとめる（屋外とランニングマシンで共通） */
+    private suspend fun prepareRest(
+        context: Context, run: RunEntity, points: List<PointEntity>, map: Bitmap, segments: List<List<FloatArray>>,
+        elevation: List<Pair<Float, Float>>, mapOnly: Boolean, indoorSplits: List<Double> = emptyList(),
+    ): Scene {
+        val dao = AppDb.get(context).runDao()
+        // 写真・動画（最大4つ。多いときは、全体からまんべんなく選ぶ）
+        val all = dao.media(run.id)
+        val pictures = all.filter { it.kind == MediaFiles.PHOTO || it.kind == MediaFiles.VIDEO }
+        val chosen = if (mapOnly) emptyList() else if (pictures.size <= 4) pictures else (0 until 4).map { pictures[it * (pictures.size - 1) / 3] }
+        val slotSec = if (chosen.isEmpty()) 0.0 else (MovieScript.STATS_START - 5.0) / chosen.size
+        val media = chosen.mapNotNull { m ->
+            val file = MediaFiles.file(context, m.file)
+            runCatching {
+                if (m.kind == MediaFiles.PHOTO) listOf(loadPhoto(file)) else loadVideoFrames(file, slotSec)
+            }.getOrNull()?.takeIf { it.isNotEmpty() }
+        }
+        val caption = all.firstOrNull { it.kind == MediaFiles.MEMO && it.text.isNotBlank() }?.text.orEmpty()
+
+        val zone = ZoneId.systemDefault()
+        val month = Instant.ofEpochMilli(run.startTime).atZone(zone).toLocalDate().withDayOfMonth(1)
+        val monthKm = dao.finishedRuns().filter {
+            Instant.ofEpochMilli(it.startTime).atZone(zone).toLocalDate().withDayOfMonth(1) == month
+        }.sumOf { it.distanceM } / 1000.0
+        val place = if (run.courseId > 0) dao.course(run.courseId)?.name.orEmpty() else ""
+
+        // 曲：ランの内容（ロードかトレイルか、気分、天気、気温、がんばり具合）から、その場で作る。毎回ちがう曲になる
+        var tune: FloatArray? = null
+        var tuneNote = ""
+        val settings = Settings(context)
+        if (settings.movieMusic && !mapOnly) {
+            val words = (listOf(run.memo) + all.filter { it.kind == MediaFiles.MEMO }.map { it.text }).joinToString(" ")
+            val zones = HeartZones(settings.maxHr, settings.restHr)
+            val hr = points.mapNotNull { it.hr }
+            val mood = TuneMood(
+                trail = run.type == "TRAIL",
+                // 「今日の体調」を付けてあればそれを、なければメモの言葉から
+                feeling = if (run.condition > 0) run.condition - 3 else TuneMood.feelingFromWords(words),
+                tempC = run.tempC,
+                sky = TuneMood.skyOf(run.weatherCode),
+                effort = if (hr.size >= 30) hr.count { zones.zoneOf(it) >= 4 }.toDouble() / hr.size + 0.2 else 0.3,
+            )
+            val seed = System.nanoTime()
+            val plan = RunTune.plan(mood, seed)
+            tune = RunTune.render(plan, seed, MovieScript.TOTAL_SEC, AUDIO_RATE)
+            tuneNote = plan.description
+        }
+
+        val accent = when (run.type) { "TRAIL" -> TRAIL; "TREADMILL" -> MACHINE; else -> ROAD }
+        return Scene(run, place, accent, map, segments, elevation, media, caption, monthKm, tune, tuneNote, indoorSplits)
+    }
+
+    private fun loadPhoto(file: File): Bitmap =
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            var sample = 1
+            while (maxOf(info.size.width, info.size.height) / sample > 1600) sample *= 2
+            decoder.setTargetSampleSize(sample)
+        }
+
+    /** 動画から、見せる時間ぶんのコマ（0.15秒おき）を取り出す */
+    private fun loadVideoFrames(file: File, slotSec: Double): List<Bitmap> {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(file.path)
+            val durationMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            // メモリを使いすぎないよう、1つの動画から最大6コマ、少し小さめの大きさで取り出す
+            val count = (slotSec * 7).toInt().coerceIn(1, 6)
+            val out = ArrayList<Bitmap>()
+            for (i in 0 until count) {
+                val tMs = (i * 150L).coerceAtMost((durationMs - 50).coerceAtLeast(0))
+                r.getScaledFrameAtTime(tMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST, W * 2 / 3, H * 2 / 3)?.let { out += it }
+            }
+            return out
+        } finally {
+            r.release()
+        }
+    }
+
+    // ---------- 絵を描く ----------
+
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.DEFAULT_BOLD }
+    /** 数字と英字：Archivo を細長い極太（見出し）と、少し細長い太字（数字）で */
+    private val condensed = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val narrow = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var fontsReady = false
+
+    private fun loadFonts(context: Context) {
+        if (fontsReady) return
+        runCatching {
+            val base = context.resources.getFont(R.font.archivo)
+            condensed.typeface = base; condensed.fontVariationSettings = "'wdth' 62, 'wght' 900"
+            narrow.typeface = base; narrow.fontVariationSettings = "'wdth' 75, 'wght' 800"
+        }.onFailure {
+            condensed.typeface = Typeface.DEFAULT_BOLD; narrow.typeface = Typeface.DEFAULT_BOLD
+        }
+        fontsReady = true
+    }
+
+    /** 英字・数字を Archivo で書く。wide=false で少し細長い太字、true で細長い極太 */
+    private fun drawLatin(c: Canvas, s: String, x: Float, y: Float, size: Float, color: Int, align: Paint.Align = Paint.Align.LEFT, heavy: Boolean = true, spacing: Float = 0f, alpha: Int = 255) {
+        val p = if (heavy) condensed else narrow
+        p.textSize = size; p.color = color; p.textAlign = align; p.alpha = alpha; p.letterSpacing = spacing
+        c.drawText(s, x, y, p)
+    }
+
+    /** 等高線の模様（飾り） */
+    private fun drawTopo(c: Canvas, color: Int, cx: Float, cy: Float, rings: Int = 12, alpha: Int = 255) {
+        line.color = color; line.alpha = alpha; line.strokeWidth = 2f
+        c.save()
+        c.rotate(-14f, cx, cy)
+        for (i in 0 until rings) {
+            val rx = 70f + i * 46f
+            val ry = 42f + i * 28f
+            c.drawOval(cx - rx, cy - ry, cx + rx, cy + ry, line)
+        }
+        c.restore()
+        line.alpha = 255
+    }
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun drawText(c: Canvas, s: String, x: Float, y: Float, size: Float, color: Int = Color.WHITE, align: Paint.Align = Paint.Align.CENTER, alpha: Int = 255) {
+        text.textSize = size; text.color = color; text.textAlign = align; text.alpha = alpha
+        c.drawText(s, x, y, text)
+    }
+
+    private fun drawFrame(c: Canvas, s: Scene, t: Double) {
+        val n = s.media.size
+        when (MovieScript.sceneAt(t, n)) {
+            MovieScript.Scene.TITLE -> drawTitle(c, s, t)
+            MovieScript.Scene.MAP -> drawMap(c, s, MovieScript.routeProgress(t, n).toFloat())
+            MovieScript.Scene.MEDIA -> {
+                val (index, p) = MovieScript.mediaSlot(t, n)
+                drawMedia(c, s, index, p.toFloat())
+            }
+            MovieScript.Scene.STATS -> drawStats(c, s, t)
+        }
+    }
+
+    private fun typeWord(s: Scene) = if (s.run.type == "TRAIL") "TRAIL" else "ROAD"
+
+    private fun drawTitle(c: Canvas, s: Scene, t: Double) {
+        c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.68f, H * 0.36f)
+        val a = (t / 0.5).coerceIn(0.0, 1.0)
+        val alpha = (a * 255).toInt()
+        val day = Instant.ofEpochMilli(s.run.startTime).atZone(ZoneId.systemDefault())
+        drawLatin(c, "CHILL RUN", 48f, 110f, 34f, INK, heavy = false, spacing = 0.12f, alpha = alpha)
+        drawLatin(c, enDate.format(day).uppercase(), W - 48f, 110f, 34f, INK, Paint.Align.RIGHT, heavy = false, spacing = 0.12f, alpha = alpha)
+        // 種類を、下からせり上がる大きな字で
+        drawLatin(c, typeWord(s), 40f, H * 0.56f + (1 - a).toFloat() * 40, 250f, s.accent, alpha = alpha)
+        fill.color = INK; fill.alpha = alpha
+        c.drawRect(48f, H * 0.6f, W - 48f, H * 0.6f + 6f, fill)
+        drawText(c, dateFmt.format(day), 48f, H * 0.6f + 70f, 40f, INK, Paint.Align.LEFT, alpha = alpha)
+        if (s.place.isNotEmpty()) drawText(c, s.place, 48f, H * 0.6f + 140f, 56f, INK, Paint.Align.LEFT, alpha = alpha)
+    }
+
+    private fun drawMap(c: Canvas, s: Scene, progress: Float) {
+        if (s.indoor) { drawIndoor(c, s, progress); return }
+        c.drawBitmap(s.map, 0f, 0f, null)
+        // ルートを、進み具合のところまで描く
+        var head: FloatArray? = null
+        for (seg in s.segments) {
+            val path = Path()
+            var started = false
+            for (p in seg) {
+                if (p[2] > progress) break
+                if (!started) { path.moveTo(p[0], p[1]); started = true } else path.lineTo(p[0], p[1])
+                head = p
+            }
+            if (!started) continue
+            line.color = BG; line.strokeWidth = 18f
+            c.drawPath(path, line)
+            line.color = SIGNAL; line.strokeWidth = 10f
+            c.drawPath(path, line)
+        }
+        head?.let {
+            fill.color = BG; fill.alpha = 255
+            c.drawCircle(it[0], it[1], 17f, fill)
+            line.color = SIGNAL; line.strokeWidth = 7f
+            c.drawCircle(it[0], it[1], 13f, line)
+        }
+        // 上の帯（深い緑）：ロードかトレイルかと、距離
+        fill.color = INK; fill.alpha = 255
+        c.drawRect(0f, 0f, W.toFloat(), 150f, fill)
+        drawLatin(c, typeWord(s), 36f, 118f, 100f, if (s.run.type == "TRAIL") SIGNAL else BG)
+        drawLatin(c, "%.2f KM".format(s.run.distanceM / 1000 * progress), W - 36f, 112f, 72f, BG, Paint.Align.RIGHT, heavy = false)
+
+        // トレイルのときは、標高のグラフも一緒に伸ばす
+        if (s.run.type == "TRAIL" && s.elevation.size >= 2) {
+            val top = H - 330f
+            val bottom = H - 80f
+            fill.color = BG; fill.alpha = 235
+            c.drawRect(0f, top - 60, W.toFloat(), H.toFloat(), fill)
+            val lo = s.elevation.minOf { it.second }
+            val range = (s.elevation.maxOf { it.second } - lo).coerceAtLeast(30f)
+            val path = Path()
+            var lastX = 40f
+            var count = 0
+            for ((d, alt) in s.elevation) {
+                if (d > progress) break
+                val x = 40f + d * (W - 80f)
+                val y = bottom - (alt - lo) / range * (bottom - top)
+                if (count == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                lastX = x
+                count++
+            }
+            if (count >= 2) {
+                val area = Path(path).apply { lineTo(lastX, bottom); lineTo(40f, bottom); close() }
+                fill.color = SIGNAL; fill.alpha = 70
+                c.drawPath(area, fill)
+                line.color = SIGNAL; line.strokeWidth = 6f
+                c.drawPath(path, line)
+            }
+            drawText(c, "のぼり", 40f, top - 14, 28f, DIM, Paint.Align.LEFT)
+            drawLatin(c, "+${Math.round(s.run.gainM * progress)} M", 140f, top - 10, 50f, INK, heavy = false)
+        }
+        // 地図の出典（国土地理院の決まり）
+        fill.color = Color.argb(200, 255, 255, 255)
+        c.drawRect(0f, H - 44f, 330f, H.toFloat(), fill)
+        drawText(c, TileStore.ATTRIBUTION, 10f, H - 14f, 20f, Color.DKGRAY, Paint.Align.LEFT)
+    }
+
+    private fun drawMedia(c: Canvas, s: Scene, index: Int, p: Float) {
+        c.drawColor(Color.BLACK)
+        val frames = s.media.getOrNull(index) ?: return
+        val bmp = frames[(p * frames.size).toInt().coerceIn(0, frames.size - 1)]
+        // 画面いっぱいに切り抜いて、ゆっくり少しだけ寄る
+        val scale = maxOf(W.toFloat() / bmp.width, H.toFloat() / bmp.height) * (1f + 0.05f * p)
+        val dw = bmp.width * scale
+        val dh = bmp.height * scale
+        fill.alpha = 255
+        c.drawBitmap(bmp, null, RectF((W - dw) / 2, (H - dh) / 2, (W + dw) / 2, (H + dh) / 2), Paint(Paint.FILTER_BITMAP_FLAG))
+        // 声のメモを、字幕のように出す
+        if (s.caption.isNotEmpty()) {
+            val tp = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = BG; textSize = 44f; typeface = Typeface.DEFAULT_BOLD }
+            val layout = StaticLayout.Builder.obtain(s.caption, 0, s.caption.length, tp, W - 96)
+                .setAlignment(Layout.Alignment.ALIGN_CENTER).setMaxLines(3).setEllipsize(android.text.TextUtils.TruncateAt.END).build()
+            val top = H - 160f - layout.height
+            fill.color = INK; fill.alpha = 215
+            c.drawRect(0f, top - 30, W.toFloat(), H.toFloat(), fill)
+            c.save()
+            c.translate(48f, top)
+            layout.draw(c)
+            c.restore()
+        }
+    }
+
+    /** ランニングマシン：地図の代わりに、1km ごとのタイムを棒で（速いほど高く。平均より速い所はオレンジ） */
+    private fun drawIndoor(c: Canvas, s: Scene, progress: Float) {
+        c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.7f, H * 0.32f, rings = 8)
+        fill.color = INK; fill.alpha = 255
+        c.drawRect(0f, 0f, W.toFloat(), 150f, fill)
+        drawLatin(c, "TREADMILL", 36f, 118f, 96f, BG)
+        drawLatin(c, "%.2f KM".format(s.run.distanceM / 1000 * progress), W - 36f, 112f, 64f, BG, Paint.Align.RIGHT, heavy = false)
+        val splits = s.indoorSplits
+        if (splits.isEmpty()) {
+            drawText(c, "1km に満たないランでした", W / 2f, H * 0.5f, 40f, INK)
+            return
+        }
+        val avg = splits.average()
+        val fastest = splits.min()
+        val slowest = splits.max()
+        val left = 60f; val right = W - 60f; val bottom = H * 0.8f; val topY = H * 0.28f
+        val gap = 14f
+        val bw = ((right - left) - gap * (splits.size - 1)) / splits.size
+        val shownCount = splits.size * progress
+        splits.forEachIndexed { i, sec ->
+            val grow = (shownCount - i).coerceIn(0f, 1f)
+            if (grow <= 0f) return@forEachIndexed
+            // 速いほど高く（いちばん遅い区間でも少しは高さを出す）
+            val norm = if (slowest > fastest) ((slowest - sec) / (slowest - fastest)).toFloat() else 0.5f
+            val h = ((bottom - topY) * (0.25f + 0.75f * norm)) * grow
+            val x = left + i * (bw + gap)
+            fill.color = if (sec < avg) SIGNAL else INK; fill.alpha = 255
+            c.drawRect(x, bottom - h, x + bw, bottom, fill)
+            if (bw >= 40 && grow >= 1f) drawLatin(c, Fmt.pace(sec), x + bw / 2, bottom - h - 14f, if (bw > 90) 40f else 28f, INK, Paint.Align.CENTER, heavy = false)
+        }
+        drawText(c, "1km ごとのタイム（オレンジ＝平均より速い）", left, bottom + 60f, 30f, DIM, Paint.Align.LEFT)
+    }
+
+    private fun drawStats(c: Canvas, s: Scene, t: Double) {
+        c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.72f, H * 0.2f, rings = 9)
+        val a = ((t - MovieScript.STATS_START) / 0.4).coerceIn(0.0, 1.0)
+        val alpha = (a * 255).toInt()
+        val run = s.run
+        drawLatin(c, typeWord(s), 48f, 250f, 120f, s.accent, alpha = alpha)
+        drawLatin(c, "%.2f".format(run.distanceM / 1000), 40f, 560f, 330f, INK, alpha = alpha)
+        drawLatin(c, "KM", 52f, 640f, 64f, INK, heavy = false, alpha = alpha)
+        fill.color = INK; fill.alpha = alpha
+        c.drawRect(48f, 690f, W - 48f, 696f, fill)
+        val pace = if (run.distanceM > 10) run.movingMs / 1000.0 / (run.distanceM / 1000.0) else null
+        val cols = listOf("タイム" to Fmt.clock(run.movingMs), "ペース /km" to Fmt.pace(pace), "のぼり" to "+${Math.round(run.gainM)}M")
+        cols.forEachIndexed { i, (label, value) ->
+            val x = 48f + i * (W - 96f) / cols.size
+            drawText(c, label, x, 742f, 26f, DIM, Paint.Align.LEFT, alpha = alpha)
+            drawLatin(c, value, x, 812f, 62f, INK, heavy = false, alpha = alpha)
+        }
+        drawText(c, "今月", 48f, 930f, 30f, DIM, Paint.Align.LEFT, alpha = alpha)
+        drawLatin(c, "${Math.round(s.monthKm)} KM", 48f, 1000f, 72f, SIGNAL, heavy = false, alpha = alpha)
+        drawLatin(c, "CHILL RUN", 48f, H - 80f, 32f, DIM, heavy = false, spacing = 0.12f, alpha = alpha)
+    }
+
+    // ---------- 動画に固める ----------
+
+    private class EncodedAudio(val format: MediaFormat, val samples: List<Pair<ByteArray, MediaCodec.BufferInfo>>)
+
+    /** 曲（左右2チャンネルを交互に並べたもの）を、動画に入れられる形（AAC）に固める */
+    private fun encodeAac(pcm: FloatArray, rate: Int): EncodedAudio {
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 2).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
+            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+        }
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+        val samples = ArrayList<Pair<ByteArray, MediaCodec.BufferInfo>>()
+        var outFormat: MediaFormat? = null
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+            val info = MediaCodec.BufferInfo()
+            var pos = 0
+            var inputDone = false
+            var outputDone = false
+            val deadline = System.currentTimeMillis() + 30_000
+            while (!outputDone && System.currentTimeMillis() < deadline) {
+                if (!inputDone) {
+                    val inIndex = codec.dequeueInputBuffer(10_000)
+                    if (inIndex >= 0) {
+                        val buf = codec.getInputBuffer(inIndex)!!
+                        buf.clear()
+                        buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        // 左右ひと組（4バイト）単位で入れる。時刻は「何組目か」から計算する
+                        val count = minOf(buf.capacity() / 4 * 2, pcm.size - pos)
+                        val pts = (pos / 2) * 1_000_000L / rate
+                        if (count <= 0) {
+                            codec.queueInputBuffer(inIndex, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            for (i in 0 until count) buf.putShort((pcm[pos + i].coerceIn(-1f, 1f) * 32767).toInt().toShort())
+                            codec.queueInputBuffer(inIndex, 0, count * 2, pts, 0)
+                            pos += count
+                        }
+                    }
+                }
+                val outIndex = codec.dequeueOutputBuffer(info, 10_000)
+                if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    outFormat = codec.outputFormat
+                } else if (outIndex >= 0) {
+                    val buf = codec.getOutputBuffer(outIndex)
+                    if (buf != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        val bytes = ByteArray(info.size)
+                        buf.position(info.offset)
+                        buf.get(bytes)
+                        samples += bytes to MediaCodec.BufferInfo().apply { set(0, bytes.size, info.presentationTimeUs, info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv()) }
+                    }
+                    codec.releaseOutputBuffer(outIndex, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                }
+            }
+        } finally {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+        }
+        return EncodedAudio(outFormat ?: error("曲を固められませんでした"), samples)
+    }
+
+    private suspend fun encode(file: File, scene: Scene, onFrame: (Int) -> Unit) = withContext(Dispatchers.Default) {
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, W, H).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+            setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
+            setInteger(MediaFormat.KEY_FRAME_RATE, MovieScript.FPS)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        }
+        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        val muxer = MediaMuxer(file.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val bitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val pixels = IntArray(W * H)
+        val yPlane = ByteArray(W * H)
+        val uPlane = ByteArray(W * H / 4)
+        val vPlane = ByteArray(W * H / 4)
+        val info = MediaCodec.BufferInfo()
+        var track = -1
+        var muxing = false
+        // 曲がうまく固められなかったときは、音なしで作る
+        val audio = scene.tune?.let { pcm -> runCatching { encodeAac(pcm, AUDIO_RATE) }.getOrNull() }
+        try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+            val frames = totalFrames()
+            var next = 0
+            var inputDone = false
+            var outputDone = false
+            val deadline = System.currentTimeMillis() + 180_000
+            while (!outputDone) {
+                ensureActive()
+                if (System.currentTimeMillis() > deadline) error("時間がかかりすぎたので中止しました")
+                if (!inputDone) {
+                    val inIndex = codec.dequeueInputBuffer(10_000)
+                    if (inIndex >= 0) {
+                        if (next >= frames) {
+                            codec.queueInputBuffer(inIndex, 0, 0, next * 1_000_000L / MovieScript.FPS, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            drawFrame(canvas, scene, next.toDouble() / MovieScript.FPS)
+                            bitmap.getPixels(pixels, 0, W, 0, 0, W, H)
+                            Yuv.fromArgb(pixels, W, H, yPlane, uPlane, vPlane)
+                            val image = codec.getInputImage(inIndex) ?: error("この機種では動画を作れませんでした（入力の形が合いません）")
+                            fillPlane(image.planes[0], yPlane, W, H)
+                            fillPlane(image.planes[1], uPlane, W / 2, H / 2)
+                            fillPlane(image.planes[2], vPlane, W / 2, H / 2)
+                            codec.queueInputBuffer(inIndex, 0, W * H * 3 / 2, next * 1_000_000L / MovieScript.FPS, 0)
+                            next++
+                            onFrame(next)
+                        }
+                    }
+                }
+                while (true) {
+                    val outIndex = codec.dequeueOutputBuffer(info, if (inputDone) 10_000 else 0)
+                    if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        track = muxer.addTrack(codec.outputFormat)
+                        val audioTrack = if (audio != null && audio.samples.isNotEmpty()) muxer.addTrack(audio.format) else -1
+                        muxer.start()
+                        muxing = true
+                        // 曲は短いので、先にまとめて書き込む
+                        if (audio != null && audioTrack >= 0) {
+                            for ((bytes, sampleInfo) in audio.samples) muxer.writeSampleData(audioTrack, java.nio.ByteBuffer.wrap(bytes), sampleInfo)
+                        }
+                    } else if (outIndex >= 0) {
+                        val buf = codec.getOutputBuffer(outIndex)
+                        if (buf != null && info.size > 0 && muxing && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                            buf.position(info.offset)
+                            buf.limit(info.offset + info.size)
+                            muxer.writeSampleData(track, buf, info)
+                        }
+                        codec.releaseOutputBuffer(outIndex, false)
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) { outputDone = true; break }
+                    } else break
+                }
+            }
+        } finally {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            runCatching { if (muxing) muxer.stop() }
+            runCatching { muxer.release() }
+            bitmap.recycle()
+        }
+        if (!muxing || file.length() < 10_000) error("動画を書き出せませんでした")
+    }
+
+    /** 機種ごとに並び方がちがう、動画の入力の1面ぶんを埋める */
+    private fun fillPlane(plane: android.media.Image.Plane, data: ByteArray, width: Int, height: Int) {
+        val buffer = plane.buffer
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        if (pixelStride == 1) {
+            for (row in 0 until height) {
+                buffer.position(row * rowStride)
+                buffer.put(data, row * width, width)
+            }
+        } else {
+            for (row in 0 until height) {
+                val base = row * rowStride
+                val src = row * width
+                for (col in 0 until width) buffer.put(base + col * pixelStride, data[src + col])
+            }
+        }
+    }
+}
