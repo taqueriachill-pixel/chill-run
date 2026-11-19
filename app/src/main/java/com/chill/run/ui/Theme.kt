@@ -48,6 +48,8 @@ object Palette {
     val signal = Color(0xFFE8571E)  // 信号のオレンジ
     val road = earth
     val trail = signal
+    /** ランニングマシン（スレートの青） */
+    val machine = Color(0xFF3E5C76)
     val warn = Color(0xFFA34A0C)
     val danger = Color(0xFFB3261E)
     val ok = Color(0xFF3F7A4A)
@@ -56,8 +58,8 @@ object Palette {
     val zones = listOf(Color(0xFF9C9484), Color(0xFF6F8FA8), Color(0xFF4F8A5B), Color(0xFFC9920F), Color(0xFFE8571E), Color(0xFFB3261E))
     fun zone(z: Int) = zones[z.coerceIn(0, 5)]
 
-    fun of(type: RunType) = if (type == RunType.TRAIL) trail else road
-    fun of(type: String) = if (type == "TRAIL") trail else road
+    fun of(type: RunType) = when (type) { RunType.TRAIL -> trail; RunType.TREADMILL -> machine; else -> road }
+    fun of(type: String) = when (type) { "TRAIL" -> trail; "TREADMILL" -> machine; else -> road }
 
     /** 色を塗った上に乗せる文字の色（オレンジの上は濃い色、緑や赤の上は白） */
     fun on(color: Color): Color = if (color == signal || color == zones[3] || color == card || color == bg) Color(0xFF1E140E) else Color.White
@@ -76,7 +78,10 @@ object Type {
     val narrow = FontFamily(f(75f, 800), f(75f, 700), f(75f, 500))
 }
 
-fun typeLabel(type: String) = if (type == "TRAIL") "トレイル" else "ロード"
+fun typeLabel(type: String) = when (type) { "TRAIL" -> "トレイル"; "TREADMILL" -> "マシン"; else -> "ロード" }
+
+/** 種類の英語の見出し */
+fun typeWord(type: String) = when (type) { "TRAIL" -> "TRAIL"; "TREADMILL" -> "TREADMILL"; else -> "ROAD" }
 
 @Composable
 fun ChillTheme(content: @Composable () -> Unit) {

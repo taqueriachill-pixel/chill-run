@@ -16,6 +16,8 @@ data class RunFact(
     val best1kMs: Long = 0,
     val best5kMs: Long = 0,
     val best10kMs: Long = 0,
+    /** ランニングマシン（自己ベストは屋外とは別に数える） */
+    val indoor: Boolean = false,
 )
 
 /** 1回のランでもらった経験値の内わけ */
@@ -86,9 +88,10 @@ object Progress {
         var week: LocalDate? = null
         val daysThisWeek = HashSet<LocalDate>()
         var achievedThisWeek = false
-        var best1 = Long.MAX_VALUE
-        var best5 = Long.MAX_VALUE
-        var best10 = Long.MAX_VALUE
+        // 自己ベストは、屋外（0）とランニングマシン（1）で別々に数える
+        val best1 = longArrayOf(Long.MAX_VALUE, Long.MAX_VALUE)
+        val best5 = longArrayOf(Long.MAX_VALUE, Long.MAX_VALUE)
+        val best10 = longArrayOf(Long.MAX_VALUE, Long.MAX_VALUE)
 
         /** 週が終わったとき：目標に届いていなければ、続いた数を 1 つ下げる（0 より下にはしない） */
         fun closeWeeks(until: LocalDate) {
@@ -111,9 +114,11 @@ object Progress {
             val firstToday = daysThisWeek.add(date)
             val day = if (firstToday) DAY_BONUS else 0
             val names = ArrayList<String>()
-            if (r.best1kMs in 1 until best1) { if (best1 != Long.MAX_VALUE) names += "1km"; best1 = r.best1kMs }
-            if (r.best5kMs in 1 until best5) { if (best5 != Long.MAX_VALUE) names += "5km"; best5 = r.best5kMs }
-            if (r.best10kMs in 1 until best10) { if (best10 != Long.MAX_VALUE) names += "10km"; best10 = r.best10kMs }
+            val k = if (r.indoor) 1 else 0
+            val pre = if (r.indoor) "マシン " else ""
+            if (r.best1kMs in 1 until best1[k]) { if (best1[k] != Long.MAX_VALUE) names += pre + "1km"; best1[k] = r.best1kMs }
+            if (r.best5kMs in 1 until best5[k]) { if (best5[k] != Long.MAX_VALUE) names += pre + "5km"; best5[k] = r.best5kMs }
+            if (r.best10kMs in 1 until best10[k]) { if (best10[k] != Long.MAX_VALUE) names += pre + "10km"; best10[k] = r.best10kMs }
             var weekBonus = 0
             var streakBonus = 0
             var streakNow = 0

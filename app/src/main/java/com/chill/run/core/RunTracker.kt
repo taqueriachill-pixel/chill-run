@@ -1,6 +1,7 @@
 package com.chill.run.core
 
-enum class RunType { ROAD, TRAIL }
+/** ROAD＝ロード、TRAIL＝トレイル、TREADMILL＝ランニングマシン（GPS を使わず、歩数で距離を出す） */
+enum class RunType { ROAD, TRAIL, TREADMILL }
 enum class GoalKind { FREE, DISTANCE, TIME, INTERVAL }
 enum class PhaseKind { WARMUP, RUN, REST, COOLDOWN }
 
@@ -250,6 +251,11 @@ class RunTracker(val config: RunConfig) {
         distanceM += d
         anchorLat = lat; anchorLon = lon
         return TrackSample(lat, lon, altitudeM, accuracyM, distanceM, movingMs, currentHr(tMs))
+    }
+
+    /** ランニングマシン：歩数から出した距離を足す（GPS の代わり） */
+    fun onIndoorDistance(d: Double) {
+        if (!isPaused && d > 0) distanceM += d
     }
 
     /** 標高（合わせ済みの値）を受け取る */

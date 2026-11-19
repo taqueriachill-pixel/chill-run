@@ -35,7 +35,7 @@ import com.chill.run.data.RunEntity
 import com.chill.run.data.Settings
 import java.time.ZoneId
 
-fun RunEntity.toFact() = RunFact(id, startTime, distanceM, gainM, best1kMs, best5kMs, best10kMs)
+fun RunEntity.toFact() = RunFact(id, startTime, distanceM, gainM, best1kMs, best5kMs, best10kMs, indoor = type == "TREADMILL")
 
 /** すべての記録から、週の目標・続いた週・レベルを計算する（記録が増えると計算しなおす） */
 @Composable

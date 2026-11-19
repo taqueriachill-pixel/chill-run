@@ -121,9 +121,9 @@ object Health {
             endTime = end,
             endZoneOffset = endOffset,
             metadata = meta("session"),
-            exerciseType = ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
-            title = if (run.type == "TRAIL") "トレイルラン（Chill Run）" else "ラン（Chill Run）",
-            exerciseRoute = route,
+            exerciseType = if (run.type == "TREADMILL") ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL else ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
+            title = when (run.type) { "TRAIL" -> "トレイルラン（Chill Run）"; "TREADMILL" -> "ランニングマシン（Chill Run）"; else -> "ラン（Chill Run）" },
+            exerciseRoute = if (run.type == "TREADMILL") null else route,
         )
         if (W_DISTANCE in granted && run.distanceM > 0) {
             records += DistanceRecord(

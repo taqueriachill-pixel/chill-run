@@ -68,6 +68,7 @@ object MovieMaker {
     private val DIM = Color.parseColor("#6C6556")
     private val TOPO = Color.parseColor("#C9BFA9")
     private val SIGNAL = TRAIL
+    private val MACHINE = Color.parseColor("#3E5C76")
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy年M月d日(E)", Locale.JAPAN)
 
     private class Scene(
@@ -84,12 +85,17 @@ object MovieMaker {
         /** その場で作った曲（入れないときは null）と、その説明 */
         val tune: FloatArray?,
         val tuneNote: String,
-    )
+        /** ランニングマシン：地図の代わりに、1km ごとのタイム（秒）を棒で見せる */
+        val indoorSplits: List<Double> = emptyList(),
+    ) {
+        val indoor get() = run.type == "TREADMILL"
+    }
 
     /** @return できた動画の記録。onProgress には 0〜100 が渡る */
     suspend fun make(context: Context, runId: Long, onProgress: (Int) -> Unit = {}): Result<MediaEntity> = lock.withLock {
-        // 曲づくりの材料にする天気を、まだなら調べておく（通信できなければ、天気なしで作る）
-        runCatching { Weather.ensureForRun(context.applicationContext, runId) }
+        // 曲づくりの材料にする天気を、まだなら調べておく（通信できなければ、天気なしで作る。ランニングマシンは調べない）
+        val isIndoor = AppDb.get(context.applicationContext).runDao().getRun(runId)?.type == "TREADMILL"
+        if (!isIndoor) runCatching { Weather.ensureForRun(context.applicationContext, runId) }
         withContext(Dispatchers.Default) {
             runCatching {
                 val app = context.applicationContext
@@ -172,11 +178,19 @@ object MovieMaker {
 
     // ---------- 下ごしらえ ----------
 
+    /** ランニングマシン：地図・経路・標高なし。1km ごとのタイムを読んでおき、あとは屋外と同じ */
+    private suspend fun prepareIndoor(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean): Scene {
+        val blank = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888).also { Canvas(it).drawColor(BG) }
+        val splits = AppDb.get(context).runDao().splits(run.id).filter { it.distanceM >= 990 }.map { it.movingMs / 1000.0 }
+        return prepareRest(context, run, points, blank, emptyList(), emptyList(), mapOnly, splits)
+    }
+
     private suspend fun prepare(context: Context, run: RunEntity, points: List<PointEntity>, mapOnly: Boolean = false): Scene {
         loadFonts(context)
         val dao = AppDb.get(context).runDao()
         val hide = Settings(context).hideZone
         val total = points.last().distM.coerceAtLeast(1.0)
+        if (run.type == "TREADMILL") return prepareIndoor(context, run, points, mapOnly)
         // 隠す場所（自宅など）の近くは描かない
         val shown = points.map { p -> hide?.hides(p.lat, p.lon) != true }
         val visible = points.filterIndexed { i, _ -> shown[i] }.ifEmpty { points }
@@ -230,6 +244,15 @@ object MovieMaker {
             list.filterIndexed { i, _ -> i % s == 0 }.map { (it.distM / total).toFloat() to (it.alt!! + run.altOffset).toFloat() }
         }
 
+        return prepareRest(context, run, points, map, segments, elevation, mapOnly)
+    }
+
+    /** 写真・動画・字幕・今月の距離・曲を用意して、場面の材料をまとめる（屋外とランニングマシンで共通） */
+    private suspend fun prepareRest(
+        context: Context, run: RunEntity, points: List<PointEntity>, map: Bitmap, segments: List<List<FloatArray>>,
+        elevation: List<Pair<Float, Float>>, mapOnly: Boolean, indoorSplits: List<Double> = emptyList(),
+    ): Scene {
+        val dao = AppDb.get(context).runDao()
         // 写真・動画（最大4つ。多いときは、全体からまんべんなく選ぶ）
         val all = dao.media(run.id)
         val pictures = all.filter { it.kind == MediaFiles.PHOTO || it.kind == MediaFiles.VIDEO }
@@ -272,7 +295,8 @@ object MovieMaker {
             tuneNote = plan.description
         }
 
-        return Scene(run, place, if (run.type == "TRAIL") TRAIL else ROAD, map, segments, elevation, media, caption, monthKm, tune, tuneNote)
+        val accent = when (run.type) { "TRAIL" -> TRAIL; "TREADMILL" -> MACHINE; else -> ROAD }
+        return Scene(run, place, accent, map, segments, elevation, media, caption, monthKm, tune, tuneNote, indoorSplits)
     }
 
     private fun loadPhoto(file: File): Bitmap =
@@ -382,6 +406,7 @@ object MovieMaker {
     }
 
     private fun drawMap(c: Canvas, s: Scene, progress: Float) {
+        if (s.indoor) { drawIndoor(c, s, progress); return }
         c.drawBitmap(s.map, 0f, 0f, null)
         // ルートを、進み具合のところまで描く
         var head: FloatArray? = null
@@ -469,6 +494,40 @@ object MovieMaker {
             layout.draw(c)
             c.restore()
         }
+    }
+
+    /** ランニングマシン：地図の代わりに、1km ごとのタイムを棒で（速いほど高く。平均より速い所はオレンジ） */
+    private fun drawIndoor(c: Canvas, s: Scene, progress: Float) {
+        c.drawColor(BG)
+        drawTopo(c, TOPO, W * 0.7f, H * 0.32f, rings = 8)
+        fill.color = INK; fill.alpha = 255
+        c.drawRect(0f, 0f, W.toFloat(), 150f, fill)
+        drawLatin(c, "TREADMILL", 36f, 118f, 96f, BG)
+        drawLatin(c, "%.2f KM".format(s.run.distanceM / 1000 * progress), W - 36f, 112f, 64f, BG, Paint.Align.RIGHT, heavy = false)
+        val splits = s.indoorSplits
+        if (splits.isEmpty()) {
+            drawText(c, "1km に満たないランでした", W / 2f, H * 0.5f, 40f, INK)
+            return
+        }
+        val avg = splits.average()
+        val fastest = splits.min()
+        val slowest = splits.max()
+        val left = 60f; val right = W - 60f; val bottom = H * 0.8f; val topY = H * 0.28f
+        val gap = 14f
+        val bw = ((right - left) - gap * (splits.size - 1)) / splits.size
+        val shownCount = splits.size * progress
+        splits.forEachIndexed { i, sec ->
+            val grow = (shownCount - i).coerceIn(0f, 1f)
+            if (grow <= 0f) return@forEachIndexed
+            // 速いほど高く（いちばん遅い区間でも少しは高さを出す）
+            val norm = if (slowest > fastest) ((slowest - sec) / (slowest - fastest)).toFloat() else 0.5f
+            val h = ((bottom - topY) * (0.25f + 0.75f * norm)) * grow
+            val x = left + i * (bw + gap)
+            fill.color = if (sec < avg) SIGNAL else INK; fill.alpha = 255
+            c.drawRect(x, bottom - h, x + bw, bottom, fill)
+            if (bw >= 40 && grow >= 1f) drawLatin(c, Fmt.pace(sec), x + bw / 2, bottom - h - 14f, if (bw > 90) 40f else 28f, INK, Paint.Align.CENTER, heavy = false)
+        }
+        drawText(c, "1km ごとのタイム（オレンジ＝平均より速い）", left, bottom + 60f, 30f, DIM, Paint.Align.LEFT)
     }
 
     private fun drawStats(c: Canvas, s: Scene, t: Double) {

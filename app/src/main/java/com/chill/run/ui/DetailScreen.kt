@@ -58,6 +58,7 @@ import com.chill.run.data.HrImport
 import com.chill.run.data.LapEntity
 import com.chill.run.data.MediaEntity
 import com.chill.run.data.MediaFiles
+import com.chill.run.data.IndoorFix
 import com.chill.run.data.Storage
 import com.chill.run.data.MergeRuns
 import com.chill.run.data.PointEntity
@@ -215,7 +216,7 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
                 color = Palette.dim, fontSize = 14.sp, fontWeight = FontWeight.Bold,
             )
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Display(if (r.type == "TRAIL") "TRAIL" else "ROAD", 60, color = color)
+                Display(typeWord(r.type), 60, color = color)
                 Display("${Fmt.km(r.distanceM)} KM", 40, Modifier.padding(bottom = 4.dp), color = Palette.earth, narrow = true)
             }
             FigureRow(
@@ -344,7 +345,32 @@ fun DetailScreen(runId: Long, onBack: () -> Unit, onOpenRun: (Long) -> Unit = {}
             if (r.note.isNotEmpty()) Text(r.note, color = Palette.warn, fontSize = 13.sp)
         }
 
-        if (points.size >= 2) {
+        // ランニングマシン：マシンに出た距離に合わせて直す
+        if (r.type == "TREADMILL") Card {
+            SectionTitle("マシンの表示に合わせる")
+            Text("距離は歩数からの推定（${Fmt.km(r.distanceM)}km）です。マシンに出た距離を入れると、ぴったりに直します。直した分は、次からの見積もりにも生かします。", color = Palette.dim, fontSize = 13.sp)
+            var km by remember(r.id) { mutableStateOf("") }
+            var fixMsg by remember(r.id) { mutableStateOf<String?>(null) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    km, { km = it.filter { c -> c.isDigit() || c == '.' }.take(6) }, Modifier.weight(1f), singleLine = true,
+                    label = { Text("マシンの距離（km）") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                )
+                SmallButton("直す", Modifier.weight(0.5f), enabled = km.toDoubleOrNull()?.let { it in 0.1..100.0 } == true) {
+                    val v = km.toDouble()
+                    scope.launch {
+                        val res = withContext(Dispatchers.IO) { runCatching { IndoorFix.apply(context, r.id, v) } }
+                        fixMsg = res.fold({ "直しました（推定の ${"%.0f".format(it * 100)}%）。" }, { "直せませんでした：${it.message}" })
+                        km = ""
+                        reload++
+                    }
+                }
+            }
+            fixMsg?.let { Text(it, color = Palette.warn, fontSize = 13.sp) }
+        }
+
+        if (points.size >= 2 && r.type != "TREADMILL") {
             Card {
                 SectionTitle("地図")
                 RouteMap(points, media = d.media, onMediaTap = { viewing = it })

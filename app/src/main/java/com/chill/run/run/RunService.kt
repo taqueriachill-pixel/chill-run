@@ -43,6 +43,7 @@ import com.chill.run.core.PhraseBook
 import com.chill.run.core.RunConfig
 import com.chill.run.core.RunTracker
 import com.chill.run.core.RunType
+import com.chill.run.core.StrideModel
 import com.chill.run.core.Scenes
 import com.chill.run.core.TrackerEvent
 import com.chill.run.data.AppDb
@@ -126,6 +127,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
 
     // 音楽
     private var music: MusicEngine? = null
+    /** ランニングマシンで走っているか（GPS を使わず、歩数で距離を出す） */
+    private var indoor = false
+    private var stride = StrideModel()
+    private var lastIndoorPointMs = 0L
     private var remote: RemoteButtons? = null
     private var camReady = false
     private var shooting = false
@@ -210,7 +215,10 @@ class RunService : Service(), SensorEventListener, LocationListener {
         // イヤホンのボタンで「ノールック写真」を撮れるよう、カメラの許可があれば camera も付ける（画面を消していても撮れる）
         camReady = settings.earButtons && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         try {
-            val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+            val indoorRun = type == RunType.TREADMILL
+            val hasLocation = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val types = (if (!indoorRun || hasLocation) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0) or
+                (if (indoorRun && checkSelfPermission(Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED) ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH else 0) or
                 (if (micReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
                 (if (camReady) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0) or
                 (if (settings.musicOn || settings.earButtons) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0)
@@ -223,7 +231,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         }
 
         val dao = AppDb.get(this).runDao()
-        val elevationSource = if (hasBarometer) "気圧" else "GPS"
+        val elevationSource = if (type == RunType.TREADMILL) "なし（マシン）" else if (hasBarometer) "気圧" else "GPS"
         // サービスがすぐ閉じられても、ランの番号は必ず決まるようにアプリ側の作業場で行う
         (application as App).scope.launch(dbDispatcher) {
             val id = dao.insertRun(
@@ -247,8 +255,18 @@ class RunService : Service(), SensorEventListener, LocationListener {
         phrases = PhraseBook(PhraseStore.load(this))
         speaker = Speaker(this, settings.ttsRate, settings.ttsVolume)
 
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
-        pressureSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        indoor = type == RunType.TREADMILL
+        if (indoor) {
+            // ランニングマシン：GPS と気圧は使わない。歩数から距離を出す（歩幅は、屋外の記録から学ぶ）
+            stride = StrideModel(factor = settings.indoorStrideFactor)
+            scope.launch {
+                val splits = withContext(Dispatchers.IO) { dao.recentFullSplits() }
+                stride = StrideModel(splits.map { it.movingMs to it.steps }, settings.indoorStrideFactor)
+            }
+        } else {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
+            pressureSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        }
         val stepDetector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
         val stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
         if (stepDetector != null) {
@@ -317,6 +335,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         }
         val events = t.tick(now)
         for (ev in events) handleEvent(ev)
+        saveIndoorPoint(t, now)
         // 音楽のテンポを、いまの足（または目標のペース）に合わせる
         music?.let { m ->
             val kind = t.currentPhase?.kind
@@ -446,13 +465,13 @@ class RunService : Service(), SensorEventListener, LocationListener {
                 pressureSum += event.values[0]
                 pressureCount++
             }
-            Sensor.TYPE_STEP_DETECTOR -> t.onStep(SystemClock.elapsedRealtime())
+            Sensor.TYPE_STEP_DETECTOR -> { val now = SystemClock.elapsedRealtime(); t.onStep(now); indoorStep(t, now) }
             Sensor.TYPE_STEP_COUNTER -> {
                 val v = event.values[0]
                 if (lastStepCounter >= 0) {
                     val n = (v - lastStepCounter).toInt().coerceIn(0, 20)
                     val now = SystemClock.elapsedRealtime()
-                    for (i in 0 until n) t.onStep(now - (n - 1 - i) * 330L)
+                    for (i in 0 until n) { t.onStep(now - (n - 1 - i) * 330L); indoorStep(t, now) }
                 }
                 lastStepCounter = v
             }
@@ -460,6 +479,24 @@ class RunService : Service(), SensorEventListener, LocationListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    /** ランニングマシン：1歩ぶんの距離（いまのケイデンスに合った歩幅）を足す */
+    private fun indoorStep(t: RunTracker, now: Long) {
+        if (!indoor) return
+        t.onIndoorDistance(stride.strideFor(t.cadence(now)))
+    }
+
+    /** ランニングマシン：地図は無いので、5秒ごとに数字だけの地点を残す（グラフや 1km ごとの区切りのため） */
+    private fun saveIndoorPoint(t: RunTracker, now: Long) {
+        if (!indoor || t.isPaused || now - lastIndoorPointMs < 5000) return
+        lastIndoorPointMs = now
+        val id = runId
+        val p = PointEntity(
+            runId = 0, time = System.currentTimeMillis(), lat = 0.0, lon = 0.0, alt = null, accuracy = 0f,
+            distM = t.distanceM, movingMs = t.movingMs, cadence = t.cadence(now), hr = t.currentHr(now),
+        )
+        scope.launch(dbDispatcher) { AppDb.get(this@RunService).runDao().insertPoint(p.copy(runId = id.await())) }
+    }
 
     private fun setPaused(paused: Boolean) {
         val t = tracker ?: return
@@ -590,6 +627,7 @@ class RunService : Service(), SensorEventListener, LocationListener {
         val altSource = startAltSource
         val dispatcher = dbDispatcher
         val joinTo = continueOf
+        val indoorRun = indoor
         continueOf = 0L
         app.scope.launch {
             val savedId = idDeferred.await()
@@ -639,9 +677,9 @@ class RunService : Service(), SensorEventListener, LocationListener {
             } else savedId
             RunHub.state.value = LiveState(finishedRunId = if (keep) finalId else -1)
             // 地図で道の種類（未舗装かどうか）を調べて、トレイルの判定をやり直す（通信できなければ、記録の画面を開いたときにもう一度）
-            if (keep) launch { runCatching { PostRun.checkSurface(context, finalId) } }
+            if (keep && !indoorRun) launch { runCatching { PostRun.checkSurface(context, finalId) } }
             // 天気と気温を調べておく（ランムービーの曲づくりに使う。通信できなければ何もしない）
-            if (keep && !autoMovie) launch { runCatching { Weather.ensureForRun(context, finalId) } }
+            if (keep && !autoMovie && !indoorRun) launch { runCatching { Weather.ensureForRun(context, finalId) } }
             // 設定で「自動で作る」にしてあれば、ランムービーを作っておく（数十秒かかるので、画面は先に進める）
             if (keep && autoMovie) launch { runCatching { MovieMaker.make(context, finalId) } }
             delay(8000)

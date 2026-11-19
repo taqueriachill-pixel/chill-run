@@ -127,6 +127,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("galleryCopy", true)
         set(v) = p.edit().putBoolean("galleryCopy", v).apply()
 
+    /** ランニングマシンの歩幅の直し（マシンの表示の距離で直すたびに、少しずつ合わせていく） */
+    var indoorStrideFactor: Double
+        get() = p.getFloat("indoorStrideFactor", 1f).toDouble()
+        set(v) = p.edit().putFloat("indoorStrideFactor", v.coerceIn(0.6, 1.5).toFloat()).apply()
+
     /** イヤホン（や時計）のボタンで、ランを操作するか */
     var earButtons: Boolean
         get() = p.getBoolean("earButtons", true)

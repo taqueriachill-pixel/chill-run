@@ -16,6 +16,12 @@ object PostRun {
         val points = dao.points(runId)
         if (points.size < 2) return
         val settings = Settings(context)
+        // ランニングマシン：地図・コース・登り・ロードかトレイルかは関係ないので、自己ベストだけ調べる
+        if (run.type == "TREADMILL") {
+            dao.updateRun(run.copy(typeSuggestion = "", shape = "", courseId = 0))
+            bests(context, runId, points)
+            return
+        }
 
         val lat = DoubleArray(points.size) { points[it].lat }
         val lon = DoubleArray(points.size) { points[it].lon }
@@ -87,6 +93,7 @@ object PostRun {
         if (!settings.osmSurface) return false
         val dao = AppDb.get(context).runDao()
         val run = dao.getRun(runId) ?: return false
+        if (run.type == "TREADMILL") return false
         if (run.unpavedFraction != null || run.distanceM < 500) return false
         val hide = settings.hideZone
         val shape = RouteAnalysis.decode(run.shape).filter { hide == null || !hide.hides(it.lat, it.lon) }

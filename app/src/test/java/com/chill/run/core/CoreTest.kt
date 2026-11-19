@@ -346,6 +346,37 @@ class CoreTest {
         assertFalse(AnnounceText.status(500.0, 200, null, null, null, null, 2.0).contains("登り"))
     }
 
+    // ---- ランニングマシン ----
+    @Test
+    fun stride_is_learned_from_outdoor_splits() {
+        // 学ぶ前は 0.98m
+        assertEquals(0.98, StrideModel().strideFor(170), 1e-9)
+        // 5:00/km・180歩/分 → 1000歩... 1km 900歩（1.11m）。6:30/km・165歩/分 → 1072歩（0.93m）
+        val samples = (0 until 4).map { 300_000L to 900 } + (0 until 4).map { 390_000L to 1072 }
+        val m = StrideModel(samples)
+        assertTrue(m.learned)
+        assertEquals(1.11, m.strideFor(180), 0.02)
+        assertEquals(0.93, m.strideFor(165), 0.02)
+        // マシンの表示で直した分（係数）がかかる
+        assertEquals(0.98 * 0.9, StrideModel(factor = 0.9).strideFor(null), 1e-9)
+        // おかしな歩数（記録の失敗）は学ばない
+        assertFalse(StrideModel(listOf(300_000L to 10, 300_000L to 99999)).learned)
+    }
+
+    @Test
+    fun treadmill_bests_are_counted_separately() {
+        val runs = listOf(
+            RunFact(1, at(2026, 11, 2), 5000.0, 0.0, best1kMs = 300_000),
+            RunFact(2, at(2026, 11, 3), 5000.0, 0.0, best1kMs = 280_000, indoor = true),  // マシンの初回：ベストにしない
+            RunFact(3, at(2026, 11, 4), 5000.0, 0.0, best1kMs = 270_000, indoor = true),  // マシンのベスト更新
+            RunFact(4, at(2026, 11, 5), 5000.0, 0.0, best1kMs = 290_000),                 // 屋外のベスト更新（マシンより遅くても）
+        )
+        val p = Progress.compute(runs, 2, tokyo, at(2026, 11, 6))
+        assertEquals(emptyList<String>(), p.perRun[2]!!.bestNames)
+        assertEquals(listOf("マシン 1km"), p.perRun[3]!!.bestNames)
+        assertEquals(listOf("1km"), p.perRun[4]!!.bestNames)
+    }
+
     // ---- きょうのふりかえり ----
     private fun today(splits: List<Double>, extra: (TodayRun) -> TodayRun = { it }) = extra(
         TodayRun(

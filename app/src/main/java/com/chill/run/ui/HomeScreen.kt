@@ -164,7 +164,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 Row(
                     Modifier.fillMaxWidth().border(2.dp, Palette.earth).clickable {
                         settings.continueOfRunId = last.id
-                        type = if (last.type == "TRAIL") RunType.TRAIL else RunType.ROAD
+                        type = runCatching { RunType.valueOf(last.type) }.getOrDefault(RunType.ROAD)
                         startRun()
                     }.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -184,6 +184,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
             // ロードかトレイルか（大きな2つの札。選んだほうが塗られる）
             TypeTile("ROAD", Palette.road, type == RunType.ROAD) { type = RunType.ROAD }
             TypeTile("TRAIL", Palette.trail, type == RunType.TRAIL) { type = RunType.TRAIL }
+            TypeTile("TREADMILL", Palette.machine, type == RunType.TREADMILL) { type = RunType.TREADMILL }
 
             Card {
                 SectionTitle("メニュー")
@@ -240,7 +241,7 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                     Text("シューズを登録すると、ここで選べます。シューズごとの距離がたまります。", color = Palette.dim, fontSize = 13.sp)
                 } else {
                     val sel = remember(type, shoeTick) { settings.shoeFor(type.name) }
-                    ShoePicker(shoes, shoeKms, sel, type.name) { settings.setShoeFor(type.name, it); shoeTick++ }
+                    ShoePicker(shoes, shoeKms, sel, if (type == RunType.TREADMILL) "ROAD" else type.name) { settings.setShoeFor(type.name, it); shoeTick++ }
                     shoes.firstOrNull { it.id == sel }?.let { s ->
                         if (shoeKm(s, shoeKms) >= s.limitKm) Text("このシューズは買い替えの目安（${"%.0f".format(s.limitKm)}km）を過ぎています。", color = Palette.warn, fontSize = 13.sp)
                     }
@@ -283,7 +284,14 @@ fun HomeScreen(onNavigate: (String) -> Unit) {
                 SmallButton("曲とテンポの設定", Modifier.fillMaxWidth()) { onNavigate("music") }
             }
 
-            if (!hasLocation) {
+            if (type == RunType.TREADMILL) {
+                Text(
+                    "ランニングマシン：GPS は使わず、歩数から距離を出します。スマホはポケットかアームバンドに入れてください（手に持つ・台に置くと数えられません）。" +
+                        "終わったら、マシンに出た距離を入れると、ぴったりに直せます。",
+                    color = Palette.dim, fontSize = 13.sp,
+                )
+                StartButton("TREADMILL", accent, enabled = goalKind != GoalKind.INTERVAL || menu != null) { startRun() }
+            } else if (!hasLocation) {
                 Card {
                     Text("位置情報の許可が必要です（「正確な位置」「アプリの使用中のみ」）。", color = Palette.warn, fontSize = 15.sp)
                     BigButton("許可する", Modifier.fillMaxWidth(), color = Palette.warn) { permissionLauncher.launch(Perms.basic) }

@@ -60,6 +60,7 @@ import com.chill.run.ui.Palette
 import com.chill.run.ui.RouteSketch
 import com.chill.run.ui.Topo
 import com.chill.run.ui.Type
+import com.chill.run.ui.typeWord
 import com.chill.run.data.AppDb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -149,12 +150,22 @@ private fun RunScreen(
             Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp).padding(top = 6.dp, bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        (if (state.type == RunType.TRAIL) "TRAIL" else "ROAD") + " · KM $km",
+                        typeWord(state.type.name) + " · KM $km",
                         color = Palette.bg, fontFamily = Type.narrow, fontWeight = FontWeight(800), fontSize = 16.sp, letterSpacing = 2.sp,
                     )
-                    Text(gpsLabel(state.gpsAccuracyM), color = gpsColor(state.gpsAccuracyM), fontSize = 13.sp)
+                    if (state.type == RunType.TREADMILL) Text("歩数で距離", color = Color(0xFFCFD6CC), fontSize = 13.sp)
+                    else Text(gpsLabel(state.gpsAccuracyM), color = gpsColor(state.gpsAccuracyM), fontSize = 13.sp)
                 }
-                RouteSketch(Modifier.fillMaxWidth().height(150.dp), track, Palette.signal, Palette.bg)
+                if (state.type == RunType.TREADMILL) {
+                    // マシンでは経路が無いので、足の回転（ケイデンス）を大きく
+                    Row(Modifier.fillMaxWidth().height(150.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Display(state.cadence?.toString() ?: "--", 96, color = Palette.bg)
+                        Column(Modifier.padding(start = 12.dp)) {
+                            Text("ピッチ（歩/分）", color = Color(0xFFCFD6CC), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text("距離は歩数からの推定です。終わったらマシンの表示に合わせられます", color = Color(0xFFCFD6CC), fontSize = 12.sp)
+                        }
+                    }
+                } else RouteSketch(Modifier.fillMaxWidth().height(150.dp), track, Palette.signal, Palette.bg)
                 val phase = state.phase
                 if (phase != null) {
                     val running = phase.kind == PhaseKind.RUN

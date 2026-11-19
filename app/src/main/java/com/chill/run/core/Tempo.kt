@@ -254,3 +254,37 @@ class CadenceModel(samples: List<Pair<Double, Int>> = emptyList()) {
 
     fun cadenceFor(paceSecPerKm: Double): Double = (base + slope * (paceSecPerKm - 360.0)).coerceIn(140.0, 200.0)
 }
+
+
+/**
+ * 歩幅のモデル（ランニングマシン用）。屋外で走った 1km ごとの区切りの「歩数」から、
+ * ケイデンス（1分の歩数）と歩幅（1000m ÷ 歩数）の関係を学ぶ。速く走るほど歩幅は広くなる。
+ * 学べていなければ、ふつうの市民ランナーの目安（0.98m）を使う。
+ */
+class StrideModel(samples: List<Pair<Long, Int>> = emptyList(), private val factor: Double = 1.0) {
+    private var slope = 0.0
+    private var base = 0.98 // ケイデンス 170 のときの歩幅（m）
+    val learned: Boolean
+
+    init {
+        // (動いていた時間ミリ秒, 歩数) → (ケイデンス, 歩幅)
+        val good = samples.filter { it.second in 600..2500 && it.first in 150_000..600_000 }
+            .map { (ms, steps) -> (steps / (ms / 60000.0)) to 1000.0 / steps }
+            .filter { it.first in 130.0..220.0 && it.second in 0.4..1.8 }
+        var ok = false
+        if (good.size >= 6) {
+            val mx = good.map { it.first }.average()
+            val my = good.map { it.second }.average()
+            val sxx = good.sumOf { (it.first - mx) * (it.first - mx) }
+            val sxy = good.sumOf { (it.first - mx) * (it.second - my) }
+            slope = if (sxx > 200) (sxy / sxx).coerceIn(0.0, 0.02) else 0.0
+            base = my + slope * (170.0 - mx)
+            ok = true
+        }
+        learned = ok
+    }
+
+    /** ケイデンス（分からなければ null）のときの歩幅（m） */
+    fun strideFor(cadence: Int?): Double =
+        ((base + slope * ((cadence ?: 170) - 170.0)) * factor).coerceIn(0.45, 1.7)
+}
