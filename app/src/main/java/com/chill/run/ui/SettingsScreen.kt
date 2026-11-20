@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.layout.padding
 import com.chill.run.run.RemoteButtons
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.LaunchedEffect
@@ -198,6 +199,35 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit = {}) {
             if (speaker.japaneseAvailable == false) {
                 Text("日本語の読み上げが使えないようです。「実機チェック」の案内を見てください。", color = Palette.warn, fontSize = 14.sp)
             }
+
+            // 読み上げの声を選ぶ（スマホの読み上げエンジンが更新されて声が増えたら、ここで選び直せる）
+            Text("読み上げの声", color = Palette.text, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            var voices by remember { mutableStateOf<List<Pair<String, Boolean>>>(emptyList()) }
+            var voice by remember { mutableStateOf(settings.ttsVoice) }
+            LaunchedEffect(Unit) {
+                // 読み上げの準備ができるまで、少し待ってから一覧をもらう
+                repeat(20) { if (voices.isEmpty()) { kotlinx.coroutines.delay(300); voices = speaker.japaneseVoices() } }
+            }
+            val sampleVoice = "いま 3キロ、18分36秒。平均 6分12秒。いいペースです。"
+            Chip("自動（通信なしで使える声）", voice.isEmpty(), Modifier.fillMaxWidth(), color = Palette.earth) {
+                voice = ""; settings.ttsVoice = ""
+                speaker.configure(rate, volume); speaker.useVoice(""); speaker.say(sampleVoice, flush = true)
+            }
+            if (voices.isEmpty()) Text("声の一覧を読み込んでいます…", color = Palette.dim, fontSize = 13.sp)
+            voices.forEachIndexed { i, (name, online) ->
+                Chip(
+                    "声 ${i + 1}" + if (online) "（通信が必要）" else "（端末内）",
+                    voice == name, Modifier.fillMaxWidth(), color = Palette.earth,
+                ) {
+                    voice = name; settings.ttsVoice = name
+                    speaker.configure(rate, volume); speaker.useVoice(name); speaker.say(sampleVoice, flush = true)
+                }
+            }
+            Text(
+                "押すと、その声で試しに読み上げて、次のランから使います。「通信が必要」の声は、圏外では読み上げられないことがあります。" +
+                    "スマホの読み上げエンジン（Google 音声サービスなど）が更新されると、声が増えたり変わったりします。",
+                color = Palette.dim, fontSize = 12.sp,
+            )
         }
 
         Card {

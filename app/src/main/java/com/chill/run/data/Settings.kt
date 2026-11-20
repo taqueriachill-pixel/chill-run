@@ -127,6 +127,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("galleryCopy", true)
         set(v) = p.edit().putBoolean("galleryCopy", v).apply()
 
+    /** 読み上げの声の名前（空なら「自動」：通信なしで使える日本語の声のうち、最初のもの） */
+    var ttsVoice: String
+        get() = p.getString("ttsVoice", "") ?: ""
+        set(v) = p.edit().putString("ttsVoice", v).apply()
+
     /** ランニングマシンの歩幅の直し（マシンの表示の距離で直すたびに、少しずつ合わせていく） */
     var indoorStrideFactor: Double
         get() = p.getFloat("indoorStrideFactor", 1f).toDouble()

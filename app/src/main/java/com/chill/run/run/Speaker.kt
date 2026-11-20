@@ -48,13 +48,15 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
         }
         val result = t.setLanguage(Locale.JAPAN)
         japaneseAvailable = result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED
-        // 通信なしで使える声があれば、それを選ぶ（山の中でも読み上げられるように）
+        // 設定で選んだ声があれば、それを使う。なければ（または消えていれば）通信なしで使える声を選ぶ（山の中でも読み上げられるように）
         runCatching {
-            val offline = t.voices?.firstOrNull {
+            val chosen = com.chill.run.data.Settings(appContext).ttsVoice
+            val picked = t.voices?.firstOrNull { chosen.isNotEmpty() && it.name == chosen }
+            val offline = t.voices?.filter {
                 it.locale.language == "ja" && !it.isNetworkConnectionRequired &&
                     it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true
-            }
-            if (offline != null) t.voice = offline
+            }?.minByOrNull { it.name }
+            (picked ?: offline)?.let { t.voice = it }
         }
         t.setAudioAttributes(attrs)
         t.setSpeechRate(rate)
@@ -128,6 +130,23 @@ class Speaker(context: Context, private var rate: Float = 1f, private var volume
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tone.release() }, 800)
         }
     }
+
+    /** 声を切りかえる（設定画面で試し聞きするとき） */
+    fun useVoice(name: String) {
+        val t = tts ?: return
+        runCatching {
+            val v = t.voices?.firstOrNull { it.name == name }
+            if (v != null) t.voice = v else onInit(TextToSpeech.SUCCESS)
+        }
+    }
+
+    /** 日本語の声の一覧（名前、通信が要るか）。読み上げの準備ができる前は空 */
+    fun japaneseVoices(): List<Pair<String, Boolean>> = runCatching {
+        tts?.voices.orEmpty()
+            .filter { it.locale.language == "ja" && it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true }
+            .sortedWith(compareBy({ it.isNetworkConnectionRequired }, { it.name }))
+            .map { it.name to it.isNetworkConnectionRequired }
+    }.getOrDefault(emptyList())
 
     fun shutdown() {
         ready = false
